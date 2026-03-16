@@ -168,6 +168,34 @@ describe('credential-proxy', () => {
     expect(lastUpstreamHeaders['transfer-encoding']).toBeUndefined();
   });
 
+  it('serves git credentials when GITHUB_TOKEN is set', async () => {
+    proxyPort = await startProxy({
+      ANTHROPIC_API_KEY: 'sk-ant-real-key',
+      GITHUB_TOKEN: 'ghp_test123',
+    });
+
+    const res = await makeRequest(proxyPort, {
+      method: 'GET',
+      path: '/git-credentials',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('password=ghp_test123');
+    expect(res.body).toContain('username=x-access-token');
+    expect(res.body).toContain('host=github.com');
+  });
+
+  it('returns 404 for git credentials when GITHUB_TOKEN is not set', async () => {
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    const res = await makeRequest(proxyPort, {
+      method: 'GET',
+      path: '/git-credentials',
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
   it('returns 502 when upstream is unreachable', async () => {
     Object.assign(mockEnv, {
       ANTHROPIC_API_KEY: 'sk-ant-real-key',
