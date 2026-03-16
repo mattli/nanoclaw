@@ -223,10 +223,11 @@ function buildContainerArgs(
   args.push('-e', `TZ=${TIMEZONE}`);
 
   // Route API traffic through the credential proxy (containers never see real secrets)
-  args.push(
-    '-e',
-    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-  );
+  const proxyUrl = `http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`;
+  args.push('-e', `ANTHROPIC_BASE_URL=${proxyUrl}`);
+
+  // Git credential helper uses this to fetch tokens from the proxy
+  args.push('-e', `NANOCLAW_CREDENTIAL_PROXY=${proxyUrl}`);
 
   // Mirror the host's auth method with a placeholder value.
   // API key mode: SDK sends x-api-key, proxy replaces with real key.

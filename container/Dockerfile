@@ -47,6 +47,17 @@ COPY agent-runner/ ./
 # Build TypeScript
 RUN npm run build
 
+# Git credential helper — calls back to the host's credential proxy.
+# The proxy returns the real token; containers never see it directly.
+# NANOCLAW_CREDENTIAL_PROXY is set by the host at container start.
+RUN printf '#!/bin/bash\nif [ "$1" = "get" ]; then curl -sf "$NANOCLAW_CREDENTIAL_PROXY/git-credentials" 2>/dev/null; fi\n' \
+    > /usr/local/bin/git-credential-nanoclaw && chmod +x /usr/local/bin/git-credential-nanoclaw
+
+# Configure git defaults for container agents
+RUN git config --system credential.helper nanoclaw && \
+    git config --system user.name "NanoClaw" && \
+    git config --system user.email "nanoclaw@localhost"
+
 # Create workspace directories
 RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/messages /workspace/ipc/tasks /workspace/ipc/input
 
