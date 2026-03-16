@@ -9,6 +9,11 @@
  *             API key via /api/oauth/claude_cli/create_api_key.
  *             Proxy injects real OAuth token on that exchange request;
  *             subsequent requests carry the temp key which is valid as-is.
+ *
+ * Git credentials:
+ *   Containers use a git credential helper that calls GET /git-credentials.
+ *   The proxy returns the GITHUB_TOKEN from .env in git credential format.
+ *   The token never enters the container environment directly.
  */
 import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
@@ -32,6 +37,7 @@ export function startCredentialProxy(
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_BASE_URL',
+    'GITHUB_TOKEN',
   ]);
 
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
@@ -46,6 +52,20 @@ export function startCredentialProxy(
 
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
+      // Git credential endpoint — returns token in git credential helper format
+      if (req.method === 'GET' && req.url === '/git-credentials') {
+        if (!secrets.GITHUB_TOKEN) {
+          res.writeHead(404);
+          res.end('No GITHUB_TOKEN configured');
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end(
+          `protocol=https\nhost=github.com\nusername=x-access-token\npassword=${secrets.GITHUB_TOKEN}\n`,
+        );
+        return;
+      }
+
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
@@ -110,7 +130,10 @@ export function startCredentialProxy(
     });
 
     server.listen(port, host, () => {
-      logger.info({ port, host, authMode }, 'Credential proxy started');
+      logger.info(
+        { port, host, authMode, hasGitToken: !!secrets.GITHUB_TOKEN },
+        'Credential proxy started',
+      );
       resolve(server);
     });
 

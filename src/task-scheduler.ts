@@ -1,4 +1,4 @@
-import { ChildProcess } from 'child_process';
+import { ChildProcess, execFile } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
@@ -75,10 +75,69 @@ export interface SchedulerDependencies {
   sendMessage: (jid: string, text: string) => Promise<void>;
 }
 
+/**
+ * Run a script task directly on the host (no container, no AI tokens).
+ * The task's prompt is executed as a bash command.
+ */
+async function runScriptTask(
+  task: ScheduledTask,
+  deps: SchedulerDependencies,
+): Promise<void> {
+  const startTime = Date.now();
+
+  logger.info({ taskId: task.id }, 'Running script task');
+
+  let result: string | null = null;
+  let error: string | null = null;
+
+  try {
+    const output = await new Promise<string>((resolve, reject) => {
+      execFile(
+        '/bin/bash',
+        ['-c', task.prompt],
+        { timeout: 60_000 },
+        (err, stdout, stderr) => {
+          if (err) reject(new Error(stderr || err.message));
+          else resolve(stdout.trim());
+        },
+      );
+    });
+    result = output || 'Completed';
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+    logger.error({ taskId: task.id, error }, 'Script task failed');
+    await deps.sendMessage(task.chat_jid, `${task.id}: ❌ failed`);
+  }
+
+  const durationMs = Date.now() - startTime;
+  logger.info({ taskId: task.id, durationMs }, 'Script task completed');
+
+  logTaskRun({
+    task_id: task.id,
+    run_at: new Date().toISOString(),
+    duration_ms: durationMs,
+    status: error ? 'error' : 'success',
+    result,
+    error,
+  });
+
+  const nextRun = computeNextRun(task);
+  const resultSummary = error
+    ? `Error: ${error}`
+    : result
+      ? result.slice(0, 200)
+      : 'Completed';
+  updateTaskAfterRun(task.id, nextRun, resultSummary);
+}
+
 async function runTask(
   task: ScheduledTask,
   deps: SchedulerDependencies,
 ): Promise<void> {
+  if (task.context_mode === 'script') {
+    return runScriptTask(task, deps);
+  }
+
   const startTime = Date.now();
   let groupDir: string;
   try {
@@ -185,8 +244,6 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
@@ -204,7 +261,6 @@ async function runTask(
     if (output.status === 'error') {
       error = output.error || 'Unknown error';
     } else if (output.result) {
-      // Result was already forwarded to the user via the streaming callback above
       result = output.result;
     }
 
@@ -212,6 +268,13 @@ async function runTask(
       { taskId: task.id, durationMs: Date.now() - startTime },
       'Task completed',
     );
+
+    // Send a deterministic confirmation instead of relying on agent output.
+    // Agent text is unpredictable (may include summaries, <internal> tags, etc.)
+    const confirmation = error
+      ? `${task.id}: ❌ failed`
+      : `${task.id}: ✅ completed`;
+    await deps.sendMessage(task.chat_jid, confirmation);
   } catch (err) {
     if (closeTimer) clearTimeout(closeTimer);
     error = err instanceof Error ? err.message : String(err);
