@@ -32,6 +32,17 @@ The `conversations/` folder has searchable history. Create files for structured 
 
 The Obsidian vault is mounted at `/workspace/extra/second-brain` (read/write).
 
+## Daily To-Do List
+
+The file `/workspace/extra/second-brain/daily-to-do.md` contains a weekly to-do list with sections for Monday through Sunday. Format:
+```
+## Month Day — Weekday
+- [ ] Item
+---
+```
+
+When the user asks to add an item to a date that doesn't exist in the file (e.g. next Monday when the file only has this week), ask them if they want to clear the current week first. If yes, reset the file with 7 new sections (Mon–Sun) for the upcoming week before adding the item.
+
 ## Admin
 
 This is the **main channel** with elevated privileges.
