@@ -269,12 +269,10 @@ async function runTask(
       'Task completed',
     );
 
-    // Send a deterministic confirmation instead of relying on agent output.
-    // Agent text is unpredictable (may include summaries, <internal> tags, etc.)
-    const confirmation = error
-      ? `${task.id}: ❌ failed`
-      : `${task.id}: ✅ completed`;
-    await deps.sendMessage(task.chat_jid, confirmation);
+    // Only notify on failure — success is evident from the agent's own output.
+    if (error) {
+      await deps.sendMessage(task.chat_jid, `${task.id}: ❌ failed`);
+    }
   } catch (err) {
     if (closeTimer) clearTimeout(closeTimer);
     error = err instanceof Error ? err.message : String(err);
