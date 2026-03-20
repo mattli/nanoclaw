@@ -34,14 +34,13 @@ The Obsidian vault is mounted at `/workspace/extra/second-brain` (read/write).
 
 ## Daily To-Do List
 
-The file `/workspace/extra/second-brain/daily-to-do.md` contains a weekly to-do list with sections for Monday through Sunday. Format:
+The file `/workspace/extra/second-brain/daily-to-do.md` is a to-do list with dated sections, most recent first. Format:
 ```
 ## Month Day — Weekday
 - [ ] Item
 ---
 ```
-
-When the user asks to add an item to a date that doesn't exist in the file (e.g. next Monday when the file only has this week), ask them if they want to clear the current week first. If yes, reset the file with 7 new sections (Mon–Sun) for the upcoming week before adding the item.
+If the user adds an item to a date that doesn't have a section yet, create one and insert it in chronological order (most recent at top).
 
 ## Admin
 
