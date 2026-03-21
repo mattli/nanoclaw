@@ -269,9 +269,11 @@ async function runTask(
       'Task completed',
     );
 
-    // Only notify on failure — success is evident from the agent's own output.
+    const label = task.display_name || task.id;
     if (error) {
-      await deps.sendMessage(task.chat_jid, `${task.id}: ❌ failed`);
+      await deps.sendMessage(task.chat_jid, `${label}: ❌ failed`);
+    } else if (!isMain) {
+      await deps.sendMessage(task.chat_jid, `${label}: ✅ done`);
     }
   } catch (err) {
     if (closeTimer) clearTimeout(closeTimer);
