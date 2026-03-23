@@ -14,6 +14,11 @@
  *   Containers use a git credential helper that calls GET /git-credentials.
  *   The proxy returns the GITHUB_TOKEN from .env in git credential format.
  *   The token never enters the container environment directly.
+ *
+ * Parallel AI:
+ *   Requests to /parallel-search/* and /parallel-task/* are forwarded to
+ *   the respective Parallel MCP endpoints with Authorization header injected.
+ *   The PARALLEL_API_KEY never enters the container environment.
  */
 import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
@@ -38,6 +43,7 @@ export function startCredentialProxy(
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_BASE_URL',
     'GITHUB_TOKEN',
+    'PARALLEL_API_KEY',
   ]);
 
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
@@ -63,6 +69,64 @@ export function startCredentialProxy(
         res.end(
           `protocol=https\nhost=github.com\nusername=x-access-token\npassword=${secrets.GITHUB_TOKEN}\n`,
         );
+        return;
+      }
+
+      // Parallel AI proxy — forward to Parallel MCP endpoints with auth injected
+      const parallelRoutes: Record<string, string> = {
+        '/parallel-search/': 'https://search-mcp.parallel.ai/',
+        '/parallel-task/': 'https://task-mcp.parallel.ai/',
+      };
+      const parallelMatch = Object.entries(parallelRoutes).find(([prefix]) =>
+        req.url?.startsWith(prefix),
+      );
+      if (parallelMatch) {
+        const [prefix, upstream] = parallelMatch;
+        if (!secrets.PARALLEL_API_KEY) {
+          res.writeHead(404);
+          res.end('No PARALLEL_API_KEY configured');
+          return;
+        }
+        const targetPath = req.url!.slice(prefix.length);
+        const targetUrl = new URL(targetPath, upstream);
+
+        const chunks: Buffer[] = [];
+        req.on('data', (c) => chunks.push(c));
+        req.on('end', () => {
+          const body = Buffer.concat(chunks);
+          const headers: Record<string, string | number | string[] | undefined> = {
+            ...(req.headers as Record<string, string>),
+            host: targetUrl.host,
+            'content-length': body.length,
+            'authorization': `Bearer ${secrets.PARALLEL_API_KEY}`,
+          };
+          delete headers['connection'];
+          delete headers['keep-alive'];
+          delete headers['transfer-encoding'];
+
+          const upstreamReq = httpsRequest(
+            {
+              hostname: targetUrl.hostname,
+              port: 443,
+              path: targetUrl.pathname + targetUrl.search,
+              method: req.method,
+              headers,
+            },
+            (upRes) => {
+              res.writeHead(upRes.statusCode!, upRes.headers);
+              upRes.pipe(res);
+            },
+          );
+          upstreamReq.on('error', (err) => {
+            logger.error({ err, url: req.url }, 'Parallel proxy upstream error');
+            if (!res.headersSent) {
+              res.writeHead(502);
+              res.end('Bad Gateway');
+            }
+          });
+          upstreamReq.write(body);
+          upstreamReq.end();
+        });
         return;
       }
 

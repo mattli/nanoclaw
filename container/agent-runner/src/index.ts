@@ -407,7 +407,9 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*'
+        'mcp__nanoclaw__*',
+        'mcp__parallel-search__*',
+        'mcp__parallel-task__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -423,6 +425,16 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        ...(process.env.NANOCLAW_CREDENTIAL_PROXY ? {
+          'parallel-search': {
+            type: 'http',
+            url: `${process.env.NANOCLAW_CREDENTIAL_PROXY}/parallel-search/mcp`,
+          },
+          'parallel-task': {
+            type: 'http',
+            url: `${process.env.NANOCLAW_CREDENTIAL_PROXY}/parallel-task/mcp`,
+          },
+        } : {}),
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
