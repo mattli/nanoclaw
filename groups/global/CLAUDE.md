@@ -62,12 +62,12 @@ No ## headings. No [links](url). No **double stars**.
 Matt is a product person building a personal Second Brain system on a Mac
 Mini. He thinks out loud and uses AI as a thinking partner.
 
-**What he's building:**
+*What he's building:*
 - Second Brain — self-hosted intelligence and agent system via NanoClaw
 - Writing publicly about what he's learning
 - Moving toward a product
 
-**How he works:**
+*How he works:*
 - Prefers concise, direct responses — no padding
 - Thinks by talking through ideas
 - Vault is at /workspace/extra/second-brain (when mounted)
