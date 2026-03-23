@@ -94,11 +94,14 @@ export function startCredentialProxy(
         req.on('data', (c) => chunks.push(c));
         req.on('end', () => {
           const body = Buffer.concat(chunks);
-          const headers: Record<string, string | number | string[] | undefined> = {
+          const headers: Record<
+            string,
+            string | number | string[] | undefined
+          > = {
             ...(req.headers as Record<string, string>),
             host: targetUrl.host,
             'content-length': body.length,
-            'authorization': `Bearer ${secrets.PARALLEL_API_KEY}`,
+            authorization: `Bearer ${secrets.PARALLEL_API_KEY}`,
           };
           delete headers['connection'];
           delete headers['keep-alive'];
@@ -118,7 +121,10 @@ export function startCredentialProxy(
             },
           );
           upstreamReq.on('error', (err) => {
-            logger.error({ err, url: req.url }, 'Parallel proxy upstream error');
+            logger.error(
+              { err, url: req.url },
+              'Parallel proxy upstream error',
+            );
             if (!res.headersSent) {
               res.writeHead(502);
               res.end('Bad Gateway');
