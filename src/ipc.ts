@@ -8,6 +8,9 @@ import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+
+// Skill IPC handlers
+import { handleLast30DaysIpc } from './skill-handlers/last30days.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
@@ -449,7 +452,14 @@ export async function processTaskIpc(
       }
       break;
 
-    default:
-      logger.warn({ type: data.type }, 'Unknown IPC task type');
+    default: {
+      // Route to skill IPC handlers
+      const handled =
+        await handleLast30DaysIpc(data as Record<string, unknown>, sourceGroup, isMain, DATA_DIR);
+      if (!handled) {
+        logger.warn({ type: data.type }, 'Unknown IPC task type');
+      }
+      break;
+    }
   }
 }

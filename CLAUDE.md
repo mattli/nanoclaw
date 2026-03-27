@@ -63,6 +63,10 @@ systemctl --user restart nanoclaw
 
 Never pass third-party API keys directly into containers via environment variables. All secrets must go through the credential proxy (`src/credential-proxy.ts`). The proxy reads keys from `.env` on the host and injects auth headers on outbound requests — containers never see real credentials. When adding a new external service, add a proxy route (like `/parallel-search/`) and have the container hit the proxy URL instead.
 
+## Launchd PATH
+
+The launchd environment has a minimal PATH (`/usr/local/bin:/usr/bin:/bin`). Skill handlers that spawn subprocesses needing Homebrew binaries (Node, Python packages, etc.) must augment PATH with `/opt/homebrew/bin`. See `src/skill-handlers/last30days.ts` for the pattern.
+
 ## Container Build Cache
 
 The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
