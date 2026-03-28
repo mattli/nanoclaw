@@ -454,8 +454,12 @@ export async function processTaskIpc(
 
     default: {
       // Route to skill IPC handlers
-      const handled =
-        await handleLast30DaysIpc(data as Record<string, unknown>, sourceGroup, isMain, DATA_DIR);
+      const handled = await handleLast30DaysIpc(
+        data as Record<string, unknown>,
+        sourceGroup,
+        isMain,
+        DATA_DIR,
+      );
       if (!handled) {
         logger.warn({ type: data.type }, 'Unknown IPC task type');
       }

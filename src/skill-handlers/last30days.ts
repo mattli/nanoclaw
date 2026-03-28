@@ -21,7 +21,13 @@ interface SkillResult {
 // Locate the last30days script
 function findScriptRoot(): string | null {
   const candidates = [
-    path.join(os.homedir(), '.claude', 'plugins', 'marketplaces', 'last30days-skill'),
+    path.join(
+      os.homedir(),
+      '.claude',
+      'plugins',
+      'marketplaces',
+      'last30days-skill',
+    ),
     path.join(os.homedir(), '.claude', 'skills', 'last30days'),
     path.join(os.homedir(), '.agents', 'skills', 'last30days'),
   ];
@@ -53,7 +59,10 @@ function loadEnvFile(): Record<string, string> {
 async function runResearch(topic: string, flags: string): Promise<SkillResult> {
   const skillRoot = findScriptRoot();
   if (!skillRoot) {
-    return { success: false, message: 'Could not find last30days scripts. Is the plugin installed?' };
+    return {
+      success: false,
+      message: 'Could not find last30days scripts. Is the plugin installed?',
+    };
   }
 
   const scriptPath = path.join(skillRoot, 'scripts', 'last30days.py');
@@ -102,13 +111,19 @@ async function runResearch(topic: string, flags: string): Promise<SkillResult> {
 
   // Load API keys from .env
   const envVars = loadEnvFile();
-  const env: Record<string, string> = { ...process.env as Record<string, string> };
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+  };
 
   // Pass through research-relevant keys
   const keyNames = [
     'SCRAPECREATORS_API_KEY',
-    'XAI_API_KEY', 'OPENAI_API_KEY', 'PARALLEL_API_KEY',
-    'BRAVE_API_KEY', 'OPENROUTER_API_KEY', 'APIFY_API_TOKEN',
+    'XAI_API_KEY',
+    'OPENAI_API_KEY',
+    'PARALLEL_API_KEY',
+    'BRAVE_API_KEY',
+    'OPENROUTER_API_KEY',
+    'APIFY_API_TOKEN',
   ];
   for (const key of keyNames) {
     if (envVars[key]) env[key] = envVars[key];
@@ -121,7 +136,7 @@ async function runResearch(topic: string, flags: string): Promise<SkillResult> {
   // Ensure Homebrew paths are in PATH (launchd has minimal PATH)
   const extraPaths = ['/opt/homebrew/bin', '/opt/homebrew/sbin'];
   const currentPath = env['PATH'] || '/usr/bin:/bin';
-  const missing = extraPaths.filter(p => !currentPath.includes(p));
+  const missing = extraPaths.filter((p) => !currentPath.includes(p));
   if (missing.length) {
     env['PATH'] = [...missing, currentPath].join(':');
   }
@@ -137,20 +152,33 @@ async function runResearch(topic: string, flags: string): Promise<SkillResult> {
 
     let stdout = '';
     let stderr = '';
-    proc.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
-    proc.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+    proc.stdout.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
+    proc.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
     proc.stdin.end();
 
     const timer = setTimeout(() => {
       proc.kill('SIGTERM');
-      resolve({ success: false, message: `Research timed out (10 min) for topic: ${topic}` });
+      resolve({
+        success: false,
+        message: `Research timed out (10 min) for topic: ${topic}`,
+      });
     }, 600000);
 
     proc.on('close', (code) => {
       clearTimeout(timer);
       if (code !== 0) {
-        logger.error({ code, stderr: stderr.slice(0, 500) }, 'last30days script failed');
-        resolve({ success: false, message: `Script exited with code ${code}: ${stderr.slice(0, 1000)}` });
+        logger.error(
+          { code, stderr: stderr.slice(0, 500) },
+          'last30days script failed',
+        );
+        resolve({
+          success: false,
+          message: `Script exited with code ${code}: ${stderr.slice(0, 1000)}`,
+        });
         return;
       }
       resolve({ success: true, message: stdout });
@@ -158,14 +186,27 @@ async function runResearch(topic: string, flags: string): Promise<SkillResult> {
 
     proc.on('error', (err) => {
       clearTimeout(timer);
-      resolve({ success: false, message: `Failed to spawn python3: ${err.message}` });
+      resolve({
+        success: false,
+        message: `Failed to spawn python3: ${err.message}`,
+      });
     });
   });
 }
 
 // Write result to IPC results directory
-function writeResult(dataDir: string, sourceGroup: string, requestId: string, result: SkillResult): void {
-  const resultsDir = path.join(dataDir, 'ipc', sourceGroup, 'last30days_results');
+function writeResult(
+  dataDir: string,
+  sourceGroup: string,
+  requestId: string,
+  result: SkillResult,
+): void {
+  const resultsDir = path.join(
+    dataDir,
+    'ipc',
+    sourceGroup,
+    'last30days_results',
+  );
   fs.mkdirSync(resultsDir, { recursive: true });
   const resultPath = path.join(resultsDir, `${requestId}.json`);
   fs.writeFileSync(resultPath, JSON.stringify(result));
@@ -180,7 +221,7 @@ export async function handleLast30DaysIpc(
   data: Record<string, unknown>,
   sourceGroup: string,
   _isMain: boolean,
-  dataDir: string
+  dataDir: string,
 ): Promise<boolean> {
   const type = data.type as string;
 
@@ -194,19 +235,28 @@ export async function handleLast30DaysIpc(
     return true;
   }
 
-  logger.info({ type, requestId, sourceGroup }, 'Processing last30days request');
+  logger.info(
+    { type, requestId, sourceGroup },
+    'Processing last30days request',
+  );
 
   if (type === 'last30days_research') {
     const topics = data.topics as string;
     const flags = (data.flags as string) || '';
 
     if (!topics) {
-      writeResult(dataDir, sourceGroup, requestId, { success: false, message: 'Missing topics' });
+      writeResult(dataDir, sourceGroup, requestId, {
+        success: false,
+        message: 'Missing topics',
+      });
       return true;
     }
 
     // Split on ||| and research each topic
-    const topicList = topics.split('|||').map(t => t.trim()).filter(Boolean);
+    const topicList = topics
+      .split('|||')
+      .map((t) => t.trim())
+      .filter(Boolean);
     const results: string[] = [];
 
     for (const topic of topicList) {
@@ -224,9 +274,15 @@ export async function handleLast30DaysIpc(
     };
 
     writeResult(dataDir, sourceGroup, requestId, combined);
-    logger.info({ requestId, topicCount: topicList.length }, 'last30days research completed');
+    logger.info(
+      { requestId, topicCount: topicList.length },
+      'last30days research completed',
+    );
   } else {
-    writeResult(dataDir, sourceGroup, requestId, { success: false, message: `Unknown type: ${type}` });
+    writeResult(dataDir, sourceGroup, requestId, {
+      success: false,
+      message: `Unknown type: ${type}`,
+    });
   }
 
   return true;
