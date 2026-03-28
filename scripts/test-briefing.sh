@@ -92,9 +92,26 @@ if [[ -z "$TASK_STATUS" ]]; then
   exit 1
 fi
 
+# Revert directory for crash recovery
+REVERT_DIR="/tmp/test-briefing-revert"
+mkdir -p "$REVERT_DIR"
+REVERT_FILE="$REVERT_DIR/${TASK_ID}.prompt"
+
+# If a previous revert file exists, a prior test run's revert failed — restore it now
+if [[ -f "$REVERT_FILE" ]]; then
+  echo "⚠ Found unrevertd prompt from a previous test run — restoring it first"
+  STALE_PROMPT=$(cat "$REVERT_FILE")
+  sql_update_prompt "$TASK_ID" "$STALE_PROMPT"
+  rm -f "$REVERT_FILE"
+  echo "  ✓ Previous prompt restored"
+fi
+
 # Save original prompt and status
 ORIGINAL_PROMPT=$(sqlite3 "$DB" "SELECT prompt FROM scheduled_tasks WHERE id = '${TASK_ID}';")
 WAS_PAUSED=false
+
+# Persist original prompt to disk so it can be recovered even if the background revert dies
+echo "$ORIGINAL_PROMPT" > "$REVERT_FILE"
 
 # Build modified prompt — override is placed BEFORE the instructions reference
 # so the agent sees it first and doesn't short-circuit after reading existing files
@@ -125,28 +142,49 @@ echo "  Dedup: disabled"
 echo ""
 echo "  Reverting prompt after task runs..."
 
-# Background: wait for the scheduler to pick up the task (next_run moves to future), then revert
-(
+# Background: wait for the scheduler to pick up the task (next_run moves to future), then revert.
+# Uses nohup so the process survives terminal close.
+REVERT_LOG="$REVERT_DIR/${TASK_ID}.log"
+nohup bash -c '
+  DB="'"$DB"'"
+  TASK_ID="'"$TASK_ID"'"
+  REVERT_FILE="'"$REVERT_FILE"'"
+  WAS_PAUSED="'"$WAS_PAUSED"'"
+
+  sql_escape() { echo "$1" | sed "s/'"'"'/'"'"''"'"'/g"; }
+  sql_update_prompt() {
+    local escaped
+    escaped=$(sql_escape "$2")
+    sqlite3 "$DB" "UPDATE scheduled_tasks SET prompt = '"'"'${escaped}'"'"' WHERE id = '"'"'${1}'"'"';"
+  }
+
+  revert_prompt() {
+    local orig
+    orig=$(cat "$REVERT_FILE")
+    sql_update_prompt "$TASK_ID" "$orig"
+    if [[ "$WAS_PAUSED" == true ]]; then
+      sqlite3 "$DB" "UPDATE scheduled_tasks SET status = '"'"'paused'"'"' WHERE id = '"'"'${TASK_ID}'"'"';"
+    fi
+    rm -f "$REVERT_FILE"
+  }
+
+  # Record the next_run at trigger time so we can detect when the scheduler advances it
+  INITIAL_NEXT_RUN=$(sqlite3 "$DB" "SELECT next_run FROM scheduled_tasks WHERE id = '"'"'${TASK_ID}'"'"';")
+
   for _ in $(seq 1 180); do
-    NEXT_RUN=$(sqlite3 "$DB" "SELECT next_run FROM scheduled_tasks WHERE id = '${TASK_ID}';")
-    NEXT_TS=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$(echo "$NEXT_RUN" | cut -d. -f1)" +%s 2>/dev/null || echo 0)
-    NOW_TS=$(date +%s)
-    if [[ "$NEXT_TS" -gt "$NOW_TS" ]]; then
-      sql_update_prompt "$TASK_ID" "$ORIGINAL_PROMPT"
-      if [[ "$WAS_PAUSED" == true ]]; then
-        sqlite3 "$DB" "UPDATE scheduled_tasks SET status = 'paused' WHERE id = '${TASK_ID}';"
-      fi
+    CURRENT_NEXT_RUN=$(sqlite3 "$DB" "SELECT next_run FROM scheduled_tasks WHERE id = '"'"'${TASK_ID}'"'"';")
+    if [[ "$CURRENT_NEXT_RUN" != "$INITIAL_NEXT_RUN" ]]; then
+      revert_prompt
       echo "  ✓ Prompt reverted ($(date +%H:%M:%S))"
       exit 0
     fi
     sleep 5
   done
-  # Timeout — revert anyway
-  sql_update_prompt "$TASK_ID" "$ORIGINAL_PROMPT"
-  if [[ "$WAS_PAUSED" == true ]]; then
-    sqlite3 "$DB" "UPDATE scheduled_tasks SET status = 'paused' WHERE id = '${TASK_ID}';"
-  fi
-  echo "  ⚠ Timed out waiting (15min), prompt reverted anyway"
-) &
 
-echo "  (revert running in background, PID $!)"
+  # Timeout (15min) — revert anyway
+  revert_prompt
+  echo "  ⚠ Timed out waiting (15min), prompt reverted anyway"
+' > "$REVERT_LOG" 2>&1 &
+disown
+
+echo "  (revert running in background, PID $!, log: $REVERT_LOG)"
