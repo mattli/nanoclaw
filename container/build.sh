@@ -13,7 +13,10 @@ CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-docker}"
 echo "Building NanoClaw agent container image..."
 echo "Image: ${IMAGE_NAME}:${TAG}"
 
-${CONTAINER_RUNTIME} build -t "${IMAGE_NAME}:${TAG}" .
+# Prune stale build cache to prevent COPY steps from using outdated files
+${CONTAINER_RUNTIME} builder prune -f >/dev/null 2>&1 || true
+
+${CONTAINER_RUNTIME} build --no-cache -t "${IMAGE_NAME}:${TAG}" .
 
 echo ""
 echo "Build complete!"

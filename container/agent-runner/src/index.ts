@@ -409,7 +409,8 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__parallel-search__*',
-        'mcp__parallel-task__*'
+        'mcp__parallel-task__*',
+        'mcp__readwise__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -435,6 +436,10 @@ async function runQuery(
             url: `${process.env.NANOCLAW_CREDENTIAL_PROXY}/parallel-task/mcp`,
           },
         } : {}),
+        'readwise': {
+          command: 'npx',
+          args: ['-y', 'mcp-remote', 'https://mcp2.readwise.io/mcp'],
+        },
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],

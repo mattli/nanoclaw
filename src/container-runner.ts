@@ -4,6 +4,7 @@
  */
 import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -162,6 +163,17 @@ function buildVolumeMounts(
     containerPath: '/home/node/.claude',
     readonly: false,
   });
+
+  // Mount mcp-remote OAuth tokens (read-only) so containers can use
+  // authenticated remote MCP servers (e.g. Readwise) without re-authing
+  const mcpAuthDir = path.join(os.homedir(), '.mcp-auth');
+  if (fs.existsSync(mcpAuthDir)) {
+    mounts.push({
+      hostPath: mcpAuthDir,
+      containerPath: '/home/node/.mcp-auth',
+      readonly: false,
+    });
+  }
 
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC

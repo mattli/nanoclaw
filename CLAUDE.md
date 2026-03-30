@@ -67,7 +67,11 @@ Never pass third-party API keys directly into containers via environment variabl
 
 The launchd environment has a minimal PATH (`/usr/local/bin:/usr/bin:/bin`). Skill handlers that spawn subprocesses needing Homebrew binaries (Node, Python packages, etc.) must augment PATH with `/opt/homebrew/bin`. See `src/skill-handlers/last30days.ts` for the pattern.
 
+## Agent Runner Session Copies
+
+On first spawn, each group gets a copy of `container/agent-runner/src/` at `data/sessions/<group>/agent-runner-src/`. This copy is NOT updated automatically. After changing the canonical agent-runner source, delete the stale session copies so they get recreated on next spawn.
+
 ## Container Build Cache
 
-The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
+The container buildkit caches the build context aggressively. `build.sh` handles this automatically — it prunes the builder and rebuilds with `--no-cache` every time.
 
