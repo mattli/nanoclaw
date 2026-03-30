@@ -325,6 +325,21 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
           continue;
         }
 
+        // Skip stale cron tasks that missed their window (>10 min late)
+        if (
+          currentTask.schedule_type === 'cron' &&
+          currentTask.next_run &&
+          Date.now() - new Date(currentTask.next_run).getTime() > 600_000
+        ) {
+          const nextRun = computeNextRun(currentTask);
+          updateTask(currentTask.id, { next_run: nextRun });
+          logger.info(
+            { taskId: currentTask.id, nextRun },
+            'Advancing stale cron task',
+          );
+          continue;
+        }
+
         deps.queue.enqueueTask(currentTask.chat_jid, currentTask.id, () =>
           runTask(currentTask, deps),
         );
