@@ -195,7 +195,7 @@ async function runThreadSearch(
 
   for (const starter of topThreads) {
     const threadId = starter.id as string;
-    const replies = await runBirdSearch(`conversation_id:${threadId}`, 100);
+    const replies = await runBirdSearch(`conversation_id:${threadId}`, 300);
     threads.push({
       starter,
       replies: replies.success ? replies.tweets : [],
