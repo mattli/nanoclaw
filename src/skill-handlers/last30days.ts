@@ -123,7 +123,10 @@ async function runBirdSearch(
     proc.on('close', (code) => {
       clearTimeout(timer);
       if (code !== 0) {
-        logger.error({ code, stderr: stderr.slice(0, 300) }, 'Bird search failed');
+        logger.error(
+          { code, stderr: stderr.slice(0, 300) },
+          'Bird search failed',
+        );
         resolve({ success: false, tweets: [] });
         return;
       }
@@ -160,9 +163,7 @@ async function runThreadSearch(
 
   // Filter to root tweets (conversationId === id) with replies
   const rootTweets = starters.tweets.filter(
-    (t) =>
-      t.conversationId === t.id &&
-      ((t.replyCount as number) || 0) > 0,
+    (t) => t.conversationId === t.id && ((t.replyCount as number) || 0) > 0,
   );
 
   // Sort by reply count descending, take top N
@@ -186,7 +187,10 @@ async function runThreadSearch(
   }
 
   // Phase 2: Fetch replies for each thread
-  logger.info({ count: topThreads.length }, 'Thread search phase 2: fetching replies');
+  logger.info(
+    { count: topThreads.length },
+    'Thread search phase 2: fetching replies',
+  );
   const threads: Array<Record<string, unknown>> = [];
 
   for (const starter of topThreads) {

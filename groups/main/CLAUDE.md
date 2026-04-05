@@ -30,9 +30,9 @@ Do NOT use markdown headings (##). Only use:
 
 ## Memory
 
-At the start of each session, read /workspace/group/memory.md if it exists. This file contains important context about Matt that should inform how you respond.
+At the start of each session, read /workspace/group/MEMORY.md if it exists. This file contains important context about Matt that should inform how you respond.
 
-When Matt reveals a preference, makes a decision, shares context about his work or goals, or corrects your behavior — update memory.md immediately before continuing the conversation. Create the file if it doesn't exist. Keep it concise — it is read at the start of every conversation so token cost matters. Use clear categories and remove outdated entries when you update.
+When Matt reveals a preference, makes a decision, shares context about his work or goals, or corrects your behavior — update MEMORY.md immediately before continuing the conversation. Create the file if it doesn't exist. Keep it concise — it is read at the start of every conversation so token cost matters. Use clear categories and remove outdated entries when you update.
 
 The conversations/ folder contains raw session history and is available for searching when Matt asks about something from a past conversation.
 
