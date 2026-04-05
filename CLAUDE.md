@@ -71,6 +71,10 @@ The launchd environment has a minimal PATH (`/usr/local/bin:/usr/bin:/bin`). Ski
 
 On first spawn, each group gets a copy of `container/agent-runner/src/` at `data/sessions/<group>/agent-runner-src/`. This copy is NOT updated automatically. After changing the canonical agent-runner source, delete the stale session copies so they get recreated on next spawn.
 
+## Commit Before Ending a Session
+
+Any changes to `src/` must be committed before the session ends. `npm run build` compiles `src/` → `dist/`, but `dist/` is ephemeral — the next `npm run build` from any session will overwrite it from whatever is in `src/`. If source changes aren't committed, a later session running build, prettier, or git checkout will silently erase them. This has caused a production regression before (thread search handler lost for a week).
+
 ## Container Build Cache
 
 The container buildkit caches the build context aggressively. `build.sh` handles this automatically — it prunes the builder and rebuilds with `--no-cache` every time.
