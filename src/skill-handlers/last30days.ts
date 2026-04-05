@@ -101,7 +101,7 @@ async function runBirdSearch(
   return new Promise((resolve) => {
     const proc = spawn(
       'node',
-      [birdPath, '--json', `--count=${count}`, query],
+      [birdPath, '--json', '--count', `${count}`, query],
       { env, stdio: ['pipe', 'pipe', 'pipe'] },
     );
 
@@ -414,7 +414,7 @@ export async function handleLast30DaysIpc(
   );
 
   if (type === 'last30days_thread_search') {
-    const query = data.query as string;
+    const query = (data.query || data.keywords) as string;
     const maxThreads = (data.maxThreads as number) || 10;
 
     if (!query) {
