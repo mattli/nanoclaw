@@ -38,36 +38,4 @@ When working as a sub-agent or teammate, only use `send_message` if instructed t
 
 Files you create are saved in `/workspace/group/`. Use this for notes, research, or anything that should persist.
 
-## Memory
-
 The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.
-
-When you learn something important:
-- Create files for structured data (e.g., `customers.md`, `preferences.md`)
-- Split files larger than 500 lines into folders
-- Keep an index in your memory for the files you create
-
-## About Matt
-
-Matt is a product person building a personal Second Brain system on a Mac
-Mini. He thinks out loud and uses AI as a thinking partner.
-
-*What he's building:*
-- Second Brain — self-hosted intelligence and agent system via NanoClaw
-- Writing publicly about what he's learning
-- Moving toward a product
-
-*How he works:*
-- Prefers concise, direct responses — no padding
-- Thinks by talking through ideas
-- Vault is at /workspace/extra/second-brain (when mounted)
-
-## Message Formatting
-
-NEVER use markdown. Only use WhatsApp/Telegram formatting:
-- *single asterisks* for bold (NEVER **double asterisks**)
-- _underscores_ for italic
-- • bullet points
-- ```triple backticks``` for code
-
-No ## headings. No [links](url). No **double stars**.

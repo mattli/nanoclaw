@@ -9,14 +9,14 @@ store/
 data/
 logs/
 
-# Groups - only track base structure and specific CLAUDE.md files
+# Groups - only track CLAUDE.md files for global and telegram_main
 groups/*
-!groups/main/
 !groups/global/
-groups/main/*
+!groups/telegram_main/
 groups/global/*
-!groups/main/CLAUDE.md
+groups/telegram_main/*
 !groups/global/CLAUDE.md
+!groups/telegram_main/CLAUDE.md
 
 # Secrets
 *.keys.json
@@ -34,5 +34,14 @@ groups/global/*
 
 # Skills system (local per-installation state)
 .nanoclaw/
+
+# Compiled skill files
+.claude/skills/**/*.js
+.claude/skills/**/*.js.map
+.claude/skills/**/*.d.ts
+.claude/skills/**/*.d.ts.map
+
+# Database
+nanoclaw.db
 
 agents-sdk-docs
