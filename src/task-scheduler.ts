@@ -64,6 +64,7 @@ export function computeNextRun(task: ScheduledTask): string | null {
 
 export interface SchedulerDependencies {
   registeredGroups: () => Record<string, RegisteredGroup>;
+  refreshGroups: () => void;
   getSessions: () => Record<string, string>;
   queue: GroupQueue;
   onProcess: (
@@ -173,9 +174,10 @@ async function runTask(
   );
 
   if (!group) {
+    updateTask(task.id, { status: 'paused' });
     logger.error(
       { taskId: task.id, groupFolder: task.group_folder },
-      'Group not found for task',
+      'Group not found for task — paused to prevent retry churn',
     );
     logTaskRun({
       task_id: task.id,
@@ -185,6 +187,11 @@ async function runTask(
       result: null,
       error: `Group not found: ${task.group_folder}`,
     });
+    const label = task.display_name || task.id;
+    await deps.sendMessage(
+      task.chat_jid,
+      `${label}: ⚠️ paused — group "${task.group_folder}" not found`,
+    );
     return;
   }
 
@@ -313,6 +320,7 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
 
   const loop = async () => {
     try {
+      deps.refreshGroups();
       const dueTasks = getDueTasks();
       if (dueTasks.length > 0) {
         logger.info({ count: dueTasks.length }, 'Found due tasks');

@@ -600,6 +600,9 @@ async function main(): Promise<void> {
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
+    refreshGroups: () => {
+      registeredGroups = getAllRegisteredGroups();
+    },
     getSessions: () => sessions,
     queue,
     onProcess: (groupJid, proc, containerName, groupFolder) =>

@@ -40,6 +40,7 @@ describe('task scheduler', () => {
 
     startSchedulerLoop({
       registeredGroups: () => ({}),
+      refreshGroups: () => {},
       getSessions: () => ({}),
       queue: { enqueueTask } as any,
       onProcess: () => {},
@@ -50,6 +51,46 @@ describe('task scheduler', () => {
 
     const task = getTaskById('task-invalid-folder');
     expect(task?.status).toBe('paused');
+  });
+
+  it('pauses and notifies when group not found for a task', async () => {
+    createTask({
+      id: 'task-missing-group',
+      group_folder: 'nonexistent',
+      chat_jid: 'test@g.us',
+      prompt: 'run',
+      schedule_type: 'once',
+      schedule_value: '2026-02-22T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: new Date(Date.now() - 60_000).toISOString(),
+      status: 'active',
+      created_at: '2026-02-22T00:00:00.000Z',
+    });
+
+    const sendMessage = vi.fn(async () => {});
+    const enqueueTask = vi.fn(
+      (_groupJid: string, _taskId: string, fn: () => Promise<void>) => {
+        void fn();
+      },
+    );
+
+    startSchedulerLoop({
+      registeredGroups: () => ({}),
+      refreshGroups: () => {},
+      getSessions: () => ({}),
+      queue: { enqueueTask } as any,
+      onProcess: () => {},
+      sendMessage,
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    const task = getTaskById('task-missing-group');
+    expect(task?.status).toBe('paused');
+    expect(sendMessage).toHaveBeenCalledWith(
+      'test@g.us',
+      expect.stringContaining('paused'),
+    );
   });
 
   it('computeNextRun anchors interval tasks to scheduled time to prevent drift', () => {

@@ -38,7 +38,8 @@ Run commands directly—don't tell the user to run them.
 
 ```bash
 npm run dev          # Run with hot reload
-npm run build        # Compile TypeScript
+npm run build        # Compile TypeScript + restart NanoClaw
+npm run typecheck    # Type-check only (no build or restart)
 ./container/build.sh # Rebuild agent container
 ```
 
