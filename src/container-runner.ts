@@ -42,6 +42,7 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  model?: 'sonnet' | 'opus' | 'haiku';
 }
 
 export interface ContainerOutput {
@@ -330,6 +331,11 @@ export async function runContainerAgent(
     let stderr = '';
     let stdoutTruncated = false;
     let stderrTruncated = false;
+
+    // Inject model override from group config
+    if (group.containerConfig?.model && !input.model) {
+      input.model = group.containerConfig.model;
+    }
 
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();

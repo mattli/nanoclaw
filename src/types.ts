@@ -30,6 +30,7 @@ export interface AllowedRoot {
 export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
+  model?: 'sonnet' | 'opus' | 'haiku'; // SDK model override; default: SDK default (sonnet)
 }
 
 export interface RegisteredGroup {
