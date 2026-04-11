@@ -28,7 +28,14 @@ vi.mock('../logger.js', () => ({
 
 type Handler = (...args: any[]) => any;
 
-const botRef = vi.hoisted(() => ({ current: null as any }));
+// Global registry of all MockBot instances created during a test.
+// `botRef.current` keeps backward compatibility with existing single-bot
+// tests (it's the last-constructed bot). `botRef.byToken` lets multi-bot
+// tests retrieve a specific bot by its constructor token.
+const botRef = vi.hoisted(() => ({
+  current: null as any,
+  byToken: new Map<string, any>(),
+}));
 
 vi.mock('grammy', () => ({
   Bot: class MockBot {
@@ -45,6 +52,7 @@ vi.mock('grammy', () => ({
     constructor(token: string) {
       this.token = token;
       botRef.current = this;
+      botRef.byToken.set(token, this);
     }
 
     command(name: string, handler: Handler) {
@@ -211,6 +219,7 @@ async function triggerMediaMessage(
 describe('TelegramChannel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    botRef.byToken.clear();
   });
 
   afterEach(() => {
@@ -989,6 +998,268 @@ describe('TelegramChannel', () => {
       expect(channel.name).toBe('telegram');
     });
   });
+
+  // --- Multi-bot routing (plan 2026-04-11-002 Unit 2) ---
+  //
+  // These tests build a channel with two bots (`default` and `wiki_tutor`)
+  // and verify that inbound messages are delivered through exactly one bot
+  // per group and outbound messages go out through the group's assigned bot.
+
+  describe('multi-bot routing', () => {
+    // Two registered groups:
+    //  - tg:100200300 / folder "test-group"  → default bot (no entry in map)
+    //  - tg:555666777 / folder "wiki-tutor"  → wiki_tutor bot
+    const twoGroupOpts = () =>
+      createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'tg:100200300': {
+            name: 'Default Group',
+            folder: 'test-group',
+            trigger: '@Andy',
+            added_at: '2024-01-01T00:00:00.000Z',
+          },
+          'tg:555666777': {
+            name: 'Wiki Tutor',
+            folder: 'wiki-tutor',
+            trigger: '@Andy',
+            added_at: '2024-01-01T00:00:00.000Z',
+          },
+        })),
+      });
+
+    const makeTwoBotChannel = (opts: TelegramChannelOpts) =>
+      new TelegramChannel(
+        new Map([
+          ['default', 'default-token'],
+          ['wiki_tutor', 'wiki-tutor-token'],
+        ]),
+        new Map([['wiki-tutor', 'wiki_tutor']]),
+        opts,
+      );
+
+    const handlersFor = (token: string, filter: string): Handler[] => {
+      const bot = botRef.byToken.get(token);
+      if (!bot) throw new Error(`No bot for token ${token}`);
+      return bot.filterHandlers.get(filter) || [];
+    };
+
+    const fireText = async (
+      token: string,
+      ctx: ReturnType<typeof createTextCtx>,
+    ) => {
+      for (const h of handlersFor(token, 'message:text')) await h(ctx);
+    };
+
+    it('starts one Bot per token and reports connected', async () => {
+      const channel = makeTwoBotChannel(twoGroupOpts());
+      await channel.connect();
+
+      expect(botRef.byToken.size).toBe(2);
+      expect(botRef.byToken.has('default-token')).toBe(true);
+      expect(botRef.byToken.has('wiki-tutor-token')).toBe(true);
+      expect(channel.isConnected()).toBe(true);
+    });
+
+    it('delivers message to wiki-tutor group via the wiki_tutor bot', async () => {
+      const opts = twoGroupOpts();
+      const channel = makeTwoBotChannel(opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({
+        chatId: 555666777,
+        text: 'what is the wiki about?',
+      });
+      await fireText('wiki-tutor-token', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:555666777',
+        expect.objectContaining({ content: 'what is the wiki about?' }),
+      );
+    });
+
+    it('drops messages for wiki-tutor group arriving on the default bot', async () => {
+      const opts = twoGroupOpts();
+      const channel = makeTwoBotChannel(opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({
+        chatId: 555666777,
+        text: 'should be ignored by default bot',
+      });
+      await fireText('default-token', ctx);
+
+      // onChatMetadata still fires — chat discovery is global.
+      expect(opts.onChatMetadata).toHaveBeenCalled();
+      // But onMessage must NOT fire — the default bot is not this group's owner.
+      expect(opts.onMessage).not.toHaveBeenCalled();
+    });
+
+    it('delivers message to default-routed group via the default bot', async () => {
+      const opts = twoGroupOpts();
+      const channel = makeTwoBotChannel(opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({
+        chatId: 100200300,
+        text: 'hello from default group',
+      });
+      await fireText('default-token', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({ content: 'hello from default group' }),
+      );
+    });
+
+    it('drops messages for default-routed group arriving on the wiki_tutor bot', async () => {
+      const opts = twoGroupOpts();
+      const channel = makeTwoBotChannel(opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({
+        chatId: 100200300,
+        text: 'wiki_tutor should ignore the default group',
+      });
+      await fireText('wiki-tutor-token', ctx);
+
+      expect(opts.onMessage).not.toHaveBeenCalled();
+    });
+
+    it('routes exactly one delivery when both bots see the same message', async () => {
+      // This is the double-delivery regression test. Both bots are members
+      // of the wiki-tutor chat (possible during a persona transition), both
+      // receive the inbound message, and only the owning bot should deliver.
+      const opts = twoGroupOpts();
+      const channel = makeTwoBotChannel(opts);
+      await channel.connect();
+
+      const ctx1 = createTextCtx({
+        chatId: 555666777,
+        text: 'same message, seen by both bots',
+        messageId: 42,
+      });
+      const ctx2 = createTextCtx({
+        chatId: 555666777,
+        text: 'same message, seen by both bots',
+        messageId: 42,
+      });
+      await fireText('default-token', ctx1);
+      await fireText('wiki-tutor-token', ctx2);
+
+      expect(opts.onMessage).toHaveBeenCalledTimes(1);
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:555666777',
+        expect.objectContaining({ content: 'same message, seen by both bots' }),
+      );
+    });
+
+    it('sends outbound to wiki-tutor group via the wiki_tutor bot', async () => {
+      const opts = twoGroupOpts();
+      const channel = makeTwoBotChannel(opts);
+      await channel.connect();
+
+      await channel.sendMessage('tg:555666777', 'librarian reply');
+
+      const wikiTutorBot = botRef.byToken.get('wiki-tutor-token');
+      const defaultBot = botRef.byToken.get('default-token');
+      expect(wikiTutorBot.api.sendMessage).toHaveBeenCalledWith(
+        '555666777',
+        'librarian reply',
+        { parse_mode: 'Markdown' },
+      );
+      expect(defaultBot.api.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('sends outbound to default-routed group via the default bot', async () => {
+      const opts = twoGroupOpts();
+      const channel = makeTwoBotChannel(opts);
+      await channel.connect();
+
+      await channel.sendMessage('tg:100200300', 'default reply');
+
+      const defaultBot = botRef.byToken.get('default-token');
+      const wikiTutorBot = botRef.byToken.get('wiki-tutor-token');
+      expect(defaultBot.api.sendMessage).toHaveBeenCalledWith(
+        '100200300',
+        'default reply',
+        { parse_mode: 'Markdown' },
+      );
+      expect(wikiTutorBot.api.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('sends to unregistered chat via default bot (no group lookup match)', async () => {
+      const opts = twoGroupOpts();
+      const channel = makeTwoBotChannel(opts);
+      await channel.connect();
+
+      await channel.sendMessage('tg:999999', 'no group, use default');
+
+      const defaultBot = botRef.byToken.get('default-token');
+      expect(defaultBot.api.sendMessage).toHaveBeenCalledWith(
+        '999999',
+        'no group, use default',
+        { parse_mode: 'Markdown' },
+      );
+    });
+
+    it('routes setTyping to the assigned bot for each group', async () => {
+      const opts = twoGroupOpts();
+      const channel = makeTwoBotChannel(opts);
+      await channel.connect();
+
+      await channel.setTyping('tg:555666777', true);
+      await channel.setTyping('tg:100200300', true);
+
+      const wikiTutorBot = botRef.byToken.get('wiki-tutor-token');
+      const defaultBot = botRef.byToken.get('default-token');
+      expect(wikiTutorBot.api.sendChatAction).toHaveBeenCalledWith(
+        '555666777',
+        'typing',
+      );
+      expect(defaultBot.api.sendChatAction).toHaveBeenCalledWith(
+        '100200300',
+        'typing',
+      );
+    });
+
+    it('falls back to default bot when group is assigned to an orphan bot ID', async () => {
+      // groupBotMap references "experimental" but no such token exists.
+      const opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'tg:100200300': {
+            name: 'Orphan',
+            folder: 'orphan-group',
+            trigger: '@Andy',
+            added_at: '2024-01-01T00:00:00.000Z',
+          },
+        })),
+      });
+      const channel = new TelegramChannel(
+        new Map([['default', 'default-token']]),
+        new Map([['orphan-group', 'experimental']]),
+        opts,
+      );
+      await channel.connect();
+
+      await channel.sendMessage('tg:100200300', 'orphan fallback');
+
+      const defaultBot = botRef.byToken.get('default-token');
+      expect(defaultBot.api.sendMessage).toHaveBeenCalledWith(
+        '100200300',
+        'orphan fallback',
+        { parse_mode: 'Markdown' },
+      );
+    });
+
+    it('disconnect stops every bot and reports not connected', async () => {
+      const channel = makeTwoBotChannel(twoGroupOpts());
+      await channel.connect();
+      expect(channel.isConnected()).toBe(true);
+
+      await channel.disconnect();
+      expect(channel.isConnected()).toBe(false);
+    });
+  });
 });
 
 // --- Multi-bot config loader (plan 2026-04-11-002 Unit 1) ---
@@ -1001,8 +1272,7 @@ describe('TelegramChannel', () => {
 describe('loadGroupBotMap', () => {
   let tempHome: string;
   let originalHomedir: typeof os.homedir;
-  const configDir = () =>
-    path.join(tempHome, '.config', 'nanoclaw');
+  const configDir = () => path.join(tempHome, '.config', 'nanoclaw');
   const configFile = () => path.join(configDir(), 'telegram-bots.json');
 
   beforeEach(() => {

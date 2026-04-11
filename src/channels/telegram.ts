@@ -66,11 +66,7 @@ export function loadGroupBotMap(): Map<string, string> {
     return new Map();
   }
 
-  if (
-    !parsed ||
-    typeof parsed !== 'object' ||
-    Array.isArray(parsed)
-  ) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     logger.warn(
       { path: configPath },
       'Telegram: telegram-bots.json must be a JSON object mapping group folder to bot ID, ignoring',
@@ -127,7 +123,6 @@ async function sendTelegramMessage(
 export class TelegramChannel implements Channel {
   name = 'telegram';
 
-  private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
   // Map of bot ID → bot token. Always contains at least one entry with the
   // sentinel key DEFAULT_BOT_ID. Additional entries come from
@@ -136,10 +131,9 @@ export class TelegramChannel implements Channel {
   // Group folder → bot ID assignment. Groups absent from this map route to
   // the default bot. Loaded from ~/.config/nanoclaw/telegram-bots.json.
   private groupBotMap: Map<string, string>;
-  // Default-bot token pulled from `tokens` for convenience — the current
-  // single-bot connect() reads this. Unit 2 removes it when connect() is
-  // refactored to instantiate one Bot per entry in `tokens`.
-  private botToken: string;
+  // Live Bot instances, populated in connect(). Keyed by the same bot IDs
+  // as `tokens`. Filter inbound and dispatch outbound through this map.
+  private bots: Map<string, Bot> = new Map();
 
   constructor(
     tokens: Map<string, string>,
@@ -149,14 +143,48 @@ export class TelegramChannel implements Channel {
     this.tokens = tokens;
     this.groupBotMap = groupBotMap;
     this.opts = opts;
-    this.botToken = tokens.get(DEFAULT_BOT_ID) ?? '';
   }
 
-  async connect(): Promise<void> {
-    this.bot = new Bot(this.botToken);
+  /**
+   * Resolve the bot ID that owns a given chat JID.
+   * Looks up the registered group for the JID, reads the group's folder,
+   * and returns the assigned bot ID from `groupBotMap`. Falls back to the
+   * default bot if the group is unregistered, missing from the map, or
+   * the map has no entry for its folder.
+   */
+  private resolveBotIdForJid(jid: string): string {
+    const group = this.opts.registeredGroups()[jid];
+    if (!group) return DEFAULT_BOT_ID;
+    return this.groupBotMap.get(group.folder) ?? DEFAULT_BOT_ID;
+  }
 
+  /**
+   * Look up a Bot by ID, falling back to the default bot if the requested
+   * ID has no live instance (e.g., orphan entry in telegram-bots.json).
+   * Returns null only if even the default bot isn't connected.
+   */
+  private botForId(botId: string): Bot | null {
+    const bot = this.bots.get(botId);
+    if (bot) return bot;
+    const fallback = this.bots.get(DEFAULT_BOT_ID);
+    if (fallback && botId !== DEFAULT_BOT_ID) {
+      logger.warn(
+        { requestedBotId: botId },
+        'Telegram: requested bot has no live instance, falling back to default bot',
+      );
+    }
+    return fallback ?? null;
+  }
+
+  /**
+   * Attach command handlers, message handlers, and the error handler to a
+   * single Bot instance. Called once per bot in `connect()`. The `botId`
+   * closure parameter lets every inbound handler filter out messages
+   * that belong to a different bot (see the expectedBotId check below).
+   */
+  private registerHandlers(bot: Bot, botId: string): void {
     // Command to get chat ID (useful for registration)
-    this.bot.command('chatid', (ctx) => {
+    bot.command('chatid', (ctx) => {
       const chatId = ctx.chat.id;
       const chatType = ctx.chat.type;
       const chatName =
@@ -171,11 +199,11 @@ export class TelegramChannel implements Channel {
     });
 
     // Command to check bot status
-    this.bot.command('ping', (ctx) => {
+    bot.command('ping', (ctx) => {
       ctx.reply(`${ASSISTANT_NAME} is online.`);
     });
 
-    this.bot.on('message:text', async (ctx) => {
+    bot.on('message:text', async (ctx) => {
       // Skip commands
       if (ctx.message.text.startsWith('/')) return;
 
@@ -216,7 +244,8 @@ export class TelegramChannel implements Channel {
         }
       }
 
-      // Store chat metadata for discovery
+      // Store chat metadata for discovery (always — helps discover new chats
+      // regardless of which bot received the message).
       const isGroup =
         ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
       this.opts.onChatMetadata(
@@ -237,6 +266,20 @@ export class TelegramChannel implements Channel {
         return;
       }
 
+      // Multi-bot filter: if this chat is assigned to a different bot via
+      // telegram-bots.json, the current bot must ignore it. The other bot
+      // (if present in the chat) handles delivery. Must come BEFORE any
+      // onMessage call so two bots in one chat never double-deliver.
+      const expectedBotId =
+        this.groupBotMap.get(group.folder) ?? DEFAULT_BOT_ID;
+      if (expectedBotId !== botId) {
+        logger.debug(
+          { chatJid, groupFolder: group.folder, botId, expectedBotId },
+          'Telegram: ignoring message on non-owning bot',
+        );
+        return;
+      }
+
       // Deliver message — startMessageLoop() will pick it up
       this.opts.onMessage(chatJid, {
         id: msgId,
@@ -249,7 +292,7 @@ export class TelegramChannel implements Channel {
       });
 
       logger.info(
-        { chatJid, chatName, sender: senderName },
+        { chatJid, chatName, sender: senderName, botId },
         'Telegram message stored',
       );
     });
@@ -259,6 +302,12 @@ export class TelegramChannel implements Channel {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
+
+      // Same multi-bot filter as text handler — drop non-text messages
+      // when this bot isn't the group's assigned owner.
+      const expectedBotId =
+        this.groupBotMap.get(group.folder) ?? DEFAULT_BOT_ID;
+      if (expectedBotId !== botId) return;
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -288,47 +337,104 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
-    this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
-    this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
-    this.bot.on('message:document', (ctx) => {
+    bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
+    bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
+    bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
+    bot.on('message:document', (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
       storeNonText(ctx, `[Document: ${name}]`);
     });
-    this.bot.on('message:sticker', (ctx) => {
+    bot.on('message:sticker', (ctx) => {
       const emoji = ctx.message.sticker?.emoji || '';
       storeNonText(ctx, `[Sticker ${emoji}]`);
     });
-    this.bot.on('message:location', (ctx) => storeNonText(ctx, '[Location]'));
-    this.bot.on('message:contact', (ctx) => storeNonText(ctx, '[Contact]'));
+    bot.on('message:location', (ctx) => storeNonText(ctx, '[Location]'));
+    bot.on('message:contact', (ctx) => storeNonText(ctx, '[Contact]'));
 
     // Handle errors gracefully
-    this.bot.catch((err) => {
-      logger.error({ err: err.message }, 'Telegram bot error');
-    });
-
-    // Start polling — returns a Promise that resolves when started
-    return new Promise<void>((resolve) => {
-      this.bot!.start({
-        onStart: (botInfo) => {
-          logger.info(
-            { username: botInfo.username, id: botInfo.id },
-            'Telegram bot connected',
-          );
-          console.log(`\n  Telegram bot: @${botInfo.username}`);
-          console.log(
-            `  Send /chatid to the bot to get a chat's registration ID\n`,
-          );
-          resolve();
-        },
-      });
+    bot.catch((err) => {
+      logger.error({ botId, err: err.message }, 'Telegram bot error');
     });
   }
 
+  /**
+   * Start one Bot per loaded token. Each bot gets its own handler closures
+   * capturing its own botId. If a bot fails to start, it's removed from
+   * the live map but the remaining bots continue serving their groups.
+   * connect() rejects only when every bot fails to start.
+   */
+  async connect(): Promise<void> {
+    const entries = [...this.tokens.entries()];
+    const startPromises = entries.map(
+      ([botId, token]) =>
+        new Promise<void>((resolve, reject) => {
+          const bot = new Bot(token);
+          this.registerHandlers(bot, botId);
+          this.bots.set(botId, bot);
+
+          let started = false;
+          const startCall = bot.start({
+            onStart: (botInfo) => {
+              started = true;
+              logger.info(
+                { botId, username: botInfo.username, id: botInfo.id },
+                'Telegram bot connected',
+              );
+              console.log(`\n  Telegram bot (${botId}): @${botInfo.username}`);
+              console.log(
+                `  Send /chatid to the bot to get a chat's registration ID\n`,
+              );
+              resolve();
+            },
+          });
+          // grammy's Bot.start() returns a Promise that rejects on init
+          // failure. The mock in tests returns undefined — both shapes are
+          // handled here so tests and production share the same code path.
+          if (
+            startCall &&
+            typeof (startCall as unknown as Promise<void>).catch === 'function'
+          ) {
+            (startCall as unknown as Promise<void>).catch((err) => {
+              if (!started) {
+                logger.error(
+                  { botId, err: err?.message ?? String(err) },
+                  'Telegram bot failed to start',
+                );
+                this.bots.delete(botId);
+                reject(err);
+              }
+            });
+          }
+        }),
+    );
+
+    const results = await Promise.allSettled(startPromises);
+    const started = results.filter((r) => r.status === 'fulfilled').length;
+    if (started === 0) {
+      throw new Error('Telegram: all bots failed to start');
+    }
+    if (started < entries.length) {
+      logger.warn(
+        { started, total: entries.length },
+        'Telegram: some bots failed to start — continuing with working bots',
+      );
+    }
+  }
+
   async sendMessage(jid: string, text: string): Promise<void> {
-    if (!this.bot) {
+    if (this.bots.size === 0) {
       logger.warn('Telegram bot not initialized');
+      return;
+    }
+
+    const botId = this.resolveBotIdForJid(jid);
+    const bot = this.botForId(botId);
+    if (!bot) {
+      logger.warn(
+        { jid, botId },
+        'Telegram: no bot available to send message (not even default)',
+      );
       return;
     }
 
@@ -338,24 +444,27 @@ export class TelegramChannel implements Channel {
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
       if (text.length <= MAX_LENGTH) {
-        await sendTelegramMessage(this.bot.api, numericId, text);
+        await sendTelegramMessage(bot.api, numericId, text);
       } else {
         for (let i = 0; i < text.length; i += MAX_LENGTH) {
           await sendTelegramMessage(
-            this.bot.api,
+            bot.api,
             numericId,
             text.slice(i, i + MAX_LENGTH),
           );
         }
       }
-      logger.info({ jid, length: text.length }, 'Telegram message sent');
+      logger.info(
+        { jid, length: text.length, botId },
+        'Telegram message sent',
+      );
     } catch (err) {
-      logger.error({ jid, err }, 'Failed to send Telegram message');
+      logger.error({ jid, botId, err }, 'Failed to send Telegram message');
     }
   }
 
   isConnected(): boolean {
-    return this.bot !== null;
+    return this.bots.size > 0;
   }
 
   ownsJid(jid: string): boolean {
@@ -363,18 +472,29 @@ export class TelegramChannel implements Channel {
   }
 
   async disconnect(): Promise<void> {
-    if (this.bot) {
-      this.bot.stop();
-      this.bot = null;
-      logger.info('Telegram bot stopped');
+    if (this.bots.size === 0) return;
+    for (const [botId, bot] of this.bots) {
+      try {
+        bot.stop();
+      } catch (err) {
+        logger.warn(
+          { botId, err },
+          'Telegram: bot.stop() threw during disconnect',
+        );
+      }
     }
+    this.bots.clear();
+    logger.info('Telegram bots stopped');
   }
 
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
-    if (!this.bot || !isTyping) return;
+    if (this.bots.size === 0 || !isTyping) return;
+    const botId = this.resolveBotIdForJid(jid);
+    const bot = this.botForId(botId);
+    if (!bot) return;
     try {
       const numericId = jid.replace(/^tg:/, '');
-      await this.bot.api.sendChatAction(numericId, 'typing');
+      await bot.api.sendChatAction(numericId, 'typing');
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');
     }
