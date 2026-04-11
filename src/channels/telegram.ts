@@ -454,10 +454,7 @@ export class TelegramChannel implements Channel {
           );
         }
       }
-      logger.info(
-        { jid, length: text.length, botId },
-        'Telegram message sent',
-      );
+      logger.info({ jid, length: text.length, botId }, 'Telegram message sent');
     } catch (err) {
       logger.error({ jid, botId, err }, 'Failed to send Telegram message');
     }
