@@ -1,7 +1,11 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
 import { Api, Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
-import { readEnvFile } from '../env.js';
+import { readEnvFile, readEnvFilePrefix } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -10,6 +14,86 @@ import {
   OnInboundMessage,
   RegisteredGroup,
 } from '../types.js';
+
+/**
+ * Sentinel bot ID for the default bot — the one loaded from TELEGRAM_BOT_TOKEN.
+ * Every code path that means "the default bot" references this constant so a
+ * typo can't silently drop messages into a missing Map slot.
+ */
+const DEFAULT_BOT_ID = 'default';
+
+/**
+ * Compute the path to the group-folder → bot-ID assignment file.
+ * Lives outside the repo (so upstream merges never touch it) and outside
+ * any container mount (so agents can't tamper with it). Follows the same
+ * convention as ~/.config/nanoclaw/mount-allowlist.json.
+ *
+ * Resolved per-call rather than captured at module-load time so tests can
+ * monkey-patch `os.homedir()` without re-importing the module.
+ */
+function botMapConfigPath(): string {
+  return path.join(os.homedir(), '.config', 'nanoclaw', 'telegram-bots.json');
+}
+
+/**
+ * Load the group-folder → bot-ID map from ~/.config/nanoclaw/telegram-bots.json.
+ * Missing file, empty object, and malformed JSON all collapse to an empty
+ * map — no group is routed to a non-default bot in those cases.
+ *
+ * @internal exported for tests only; factory is the sole production caller.
+ */
+export function loadGroupBotMap(): Map<string, string> {
+  const configPath = botMapConfigPath();
+  let content: string;
+  try {
+    content = fs.readFileSync(configPath, 'utf-8');
+  } catch {
+    logger.debug(
+      { path: configPath },
+      'Telegram: no telegram-bots.json found, all groups route to default bot',
+    );
+    return new Map();
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (err) {
+    logger.warn(
+      { err, path: configPath },
+      'Telegram: telegram-bots.json is not valid JSON, ignoring (all groups route to default bot)',
+    );
+    return new Map();
+  }
+
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    Array.isArray(parsed)
+  ) {
+    logger.warn(
+      { path: configPath },
+      'Telegram: telegram-bots.json must be a JSON object mapping group folder to bot ID, ignoring',
+    );
+    return new Map();
+  }
+
+  const map = new Map<string, string>();
+  for (const [folder, botId] of Object.entries(
+    parsed as Record<string, unknown>,
+  )) {
+    if (typeof botId !== 'string' || !botId) {
+      logger.warn(
+        { folder, botId, path: configPath },
+        'Telegram: telegram-bots.json entry is not a non-empty string, skipping',
+      );
+      continue;
+    }
+    map.set(folder, botId);
+  }
+
+  return map;
+}
 
 export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
@@ -45,11 +129,27 @@ export class TelegramChannel implements Channel {
 
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
+  // Map of bot ID → bot token. Always contains at least one entry with the
+  // sentinel key DEFAULT_BOT_ID. Additional entries come from
+  // TELEGRAM_BOT_TOKEN_<ID> env vars discovered at factory time.
+  private tokens: Map<string, string>;
+  // Group folder → bot ID assignment. Groups absent from this map route to
+  // the default bot. Loaded from ~/.config/nanoclaw/telegram-bots.json.
+  private groupBotMap: Map<string, string>;
+  // Default-bot token pulled from `tokens` for convenience — the current
+  // single-bot connect() reads this. Unit 2 removes it when connect() is
+  // refactored to instantiate one Bot per entry in `tokens`.
   private botToken: string;
 
-  constructor(botToken: string, opts: TelegramChannelOpts) {
-    this.botToken = botToken;
+  constructor(
+    tokens: Map<string, string>,
+    groupBotMap: Map<string, string>,
+    opts: TelegramChannelOpts,
+  ) {
+    this.tokens = tokens;
+    this.groupBotMap = groupBotMap;
     this.opts = opts;
+    this.botToken = tokens.get(DEFAULT_BOT_ID) ?? '';
   }
 
   async connect(): Promise<void> {
@@ -282,12 +382,77 @@ export class TelegramChannel implements Channel {
 }
 
 registerChannel('telegram', (opts: ChannelOpts) => {
+  // Default bot token — the existing single-bot contract.
+  // Preserves "process.env first, .env fallback" semantics for dev vs launchd.
   const envVars = readEnvFile(['TELEGRAM_BOT_TOKEN']);
-  const token =
+  const defaultToken =
     process.env.TELEGRAM_BOT_TOKEN || envVars.TELEGRAM_BOT_TOKEN || '';
-  if (!token) {
+
+  // Additional named bots: TELEGRAM_BOT_TOKEN_<ID> from both process.env
+  // (dev) and the .env file (launchd). Suffix is lowercased so the bot ID
+  // written in telegram-bots.json stays in normal casing while env keys
+  // follow shell UPPER_SNAKE convention.
+  const tokens = new Map<string, string>();
+  if (defaultToken) tokens.set(DEFAULT_BOT_ID, defaultToken);
+
+  const addNamedToken = (rawSuffix: string, value: string) => {
+    if (!rawSuffix || !value) return;
+    const botId = rawSuffix.toLowerCase();
+    if (botId === DEFAULT_BOT_ID) {
+      logger.warn(
+        { envKey: `TELEGRAM_BOT_TOKEN_${rawSuffix}` },
+        'Telegram: named bot ID collides with sentinel "default", ignoring',
+      );
+      return;
+    }
+    tokens.set(botId, value);
+  };
+
+  // Scan process.env for named tokens (dev path — `npm run dev`).
+  for (const [k, v] of Object.entries(process.env)) {
+    if (!k.startsWith('TELEGRAM_BOT_TOKEN_') || !v) continue;
+    addNamedToken(k.slice('TELEGRAM_BOT_TOKEN_'.length), v);
+  }
+
+  // Scan the .env file for named tokens (production path — launchd).
+  const envFilePrefixed = readEnvFilePrefix('TELEGRAM_BOT_TOKEN_');
+  for (const [suffix, value] of Object.entries(envFilePrefixed)) {
+    // process.env wins if both are set, matching the default-token pattern above.
+    const botId = suffix.toLowerCase();
+    if (tokens.has(botId)) continue;
+    addNamedToken(suffix, value);
+  }
+
+  if (tokens.size === 0) {
     logger.warn('Telegram: TELEGRAM_BOT_TOKEN not set');
     return null;
   }
-  return new TelegramChannel(token, opts);
+
+  // Load the group-folder → bot-ID assignment map.
+  const groupBotMap = loadGroupBotMap();
+
+  // Validate: every bot ID referenced in groupBotMap must exist in tokens.
+  // Orphan references are logged loudly but left in place — the lookup path
+  // falls back to the default bot so the group stays functional.
+  for (const [folder, botId] of groupBotMap) {
+    if (!tokens.has(botId)) {
+      logger.error(
+        { folder, botId },
+        'Telegram: telegram-bots.json references unknown bot ID (no matching TELEGRAM_BOT_TOKEN_<ID> env var). This group will fall back to the default bot.',
+      );
+    }
+  }
+
+  logger.info(
+    {
+      botCount: tokens.size,
+      botIds: [...tokens.keys()],
+      assignedGroups: [...groupBotMap.entries()].map(
+        ([folder, botId]) => `${folder}→${botId}`,
+      ),
+    },
+    'Telegram: loaded bot tokens and group assignment map',
+  );
+
+  return new TelegramChannel(tokens, groupBotMap, opts);
 });
