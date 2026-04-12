@@ -60,6 +60,16 @@ systemctl --user restart nanoclaw
 
 **WhatsApp not connecting after upgrade:** WhatsApp is now a separate channel fork, not bundled in core. Run `/add-whatsapp` (or `git remote add whatsapp https://github.com/qwibitai/nanoclaw-whatsapp.git && git fetch whatsapp main && (git merge whatsapp/main || { git checkout --theirs package-lock.json && git add package-lock.json && git merge --continue; }) && npm run build`) to install it. Existing auth credentials and groups are preserved.
 
+## Telegram Bot Privacy Mode (for `requiresTrigger: false` groups)
+
+Telegram bots have a **Group Privacy** setting in BotFather that's on by default. With it on, bots in group chats only see: commands (starting with `/`), messages @mentioning the bot, and replies to the bot's own messages. Everything else is hidden from the bot at the Telegram layer, before NanoClaw ever sees it.
+
+**This means:** for any Telegram group registered with `requiresTrigger: false`, the application-layer flag alone is insufficient. Group Privacy must also be **disabled** in BotFather for the bot, otherwise plain messages never reach NanoClaw and the group appears non-responsive. DMs are unaffected (privacy mode doesn't apply to 1:1 chats), which is why a main-channel DM works without any BotFather change.
+
+**To disable:** BotFather → `/mybots` → select bot → Bot Settings → Group Privacy → Turn off.
+
+Privacy mode is per-bot and global across all groups that bot is a member of. Turning it off on the main bot doesn't change behavior in other `requiresTrigger: true` groups — those still enforce the trigger at the application layer (`src/index.ts:173`).
+
 ## Credential Proxy Pattern
 
 Never pass third-party API keys directly into containers via environment variables. All secrets must go through the credential proxy (`src/credential-proxy.ts`). The proxy reads keys from `.env` on the host and injects auth headers on outbound requests — containers never see real credentials. When adding a new external service, add a proxy route (like `/parallel-search/`) and have the container hit the proxy URL instead.
@@ -67,6 +77,8 @@ Never pass third-party API keys directly into containers via environment variabl
 ## Launchd PATH
 
 The launchd environment has a minimal PATH (`/usr/local/bin:/usr/bin:/bin`). Skill handlers that spawn subprocesses needing Homebrew binaries (Node, Python packages, etc.) must augment PATH with `/opt/homebrew/bin`. See `src/skill-handlers/last30days.ts` for the pattern.
+
+**Launchd also does not populate `process.env` with secrets.** The plist exports only `PATH` and `HOME` — all other env-configured secrets (including `TELEGRAM_BOT_TOKEN`, `GITHUB_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, etc.) are read from the `.env` file at runtime via `readEnvFile` / `readEnvFilePrefix` in `src/env.ts`. Any new code that introduces env-var scanning must read both sources: `process.env` for dev (`npm run dev` inherits the shell env) and the `.env` file for production (launchd). A pure `process.env` scan will work in dev and silently fail under launchd. Use `readEnvFilePrefix(prefix)` for prefix scans — it's the blessed pattern for prefix-based env reads.
 
 ## Agent Runner Session Copies
 
