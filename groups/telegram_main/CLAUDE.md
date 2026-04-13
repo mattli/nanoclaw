@@ -35,9 +35,9 @@ The Obsidian vault is mounted at `/workspace/extra/second-brain` (read/write).
 
 ## Knowledge Wiki
 
-I maintain a personal knowledge wiki at `/workspace/extra/second-brain/projects/intelligence/wiki/` — compiled knowledge pages on AI topics, tools, people, and trends, built from Readwise saves.
+I maintain a personal knowledge wiki at `/workspace/extra/second-brain/resources/wiki/` — compiled knowledge pages on AI topics, tools, people, and trends, built from Readwise saves.
 
-At the start of a session, read `/workspace/extra/second-brain/projects/intelligence/wiki/INDEX.md` to see what topics have dedicated pages. When a topic comes up in conversation that matches a wiki page, read that page before responding so your answer is informed by what I've already learned about it. Briefly note which page you referenced so I can trace the source.
+At the start of a session, read `/workspace/extra/second-brain/resources/wiki/INDEX.md` to see what topics have dedicated pages. When a topic comes up in conversation that matches a wiki page, read that page before responding so your answer is informed by what I've already learned about it. Briefly note which page you referenced so I can trace the source.
 
 Check the wiki first when I ask about the AI landscape, a specific person, or a concept — it may already have a synthesized page on the topic before you do fresh web research.
 

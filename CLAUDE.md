@@ -96,6 +96,10 @@ The launchd environment has a minimal PATH (`/usr/local/bin:/usr/bin:/bin`). Ski
 
 **Launchd also does not populate `process.env` with secrets.** The plist exports only `PATH` and `HOME` — all other env-configured secrets (including `TELEGRAM_BOT_TOKEN`, `GITHUB_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, etc.) are read from the `.env` file at runtime via `readEnvFile` / `readEnvFilePrefix` in `src/env.ts`. Any new code that introduces env-var scanning must read both sources: `process.env` for dev (`npm run dev` inherits the shell env) and the `.env` file for production (launchd). A pure `process.env` scan will work in dev and silently fail under launchd. Use `readEnvFilePrefix(prefix)` for prefix scans — it's the blessed pattern for prefix-based env reads.
 
+## Channel Import Barrel
+
+`src/channels/index.ts` is a barrel file where each channel must be explicitly imported. Upstream keeps this file empty (channels are fork repos for them). After any upstream merge, verify that `import './telegram.js'` is present — without it, NanoClaw crashes on startup with "No channels connected".
+
 ## Agent Runner Session Copies
 
 On first spawn, each group gets a copy of `container/agent-runner/src/` at `data/sessions/<group>/agent-runner-src/`. This copy is NOT updated automatically. After changing the canonical agent-runner source, delete the stale session copies so they get recreated on next spawn.
