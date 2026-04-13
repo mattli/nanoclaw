@@ -9,5 +9,13 @@
   },
   "enabledPlugins": {
     "nanoclaw-skills@nanoclaw-skills": true
+  },
+  "sandbox": {
+    "network": {
+      "allowedDomains": [
+        "npm.registry.com",
+        "us.i.posthog.com"
+      ]
+    }
   }
 }
