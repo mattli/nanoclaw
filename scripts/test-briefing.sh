@@ -6,7 +6,7 @@
 set -euo pipefail
 
 DB="$HOME/nanoclaw/store/messages.db"
-VAULT="$HOME/second-brain/projects/intelligence"
+VAULT="$HOME/second-brain/resources/intelligence"
 TYPE="${1:-}"
 
 if [[ -z "$TYPE" ]]; then
@@ -32,9 +32,9 @@ sql_update_prompt() {
 case "$TYPE" in
   daily)
     TASK_ID="daily-briefing"
-    OUTPUT_DIR="$VAULT/ai-briefings"
+    OUTPUT_DIR="$VAULT/daily-briefings"
     BASE=$(date +%Y-%m-%d)
-    SUBDIR="ai-briefings"
+    SUBDIR="daily-briefings"
     DEDUP_OVERRIDE="skip the 'Before You Start' section (do NOT read previous briefings) and skip the 'Deduplication Review' section (#6). Do not deduplicate against previous briefings."
     ;;
   weekly)
@@ -53,9 +53,9 @@ case "$TYPE" in
     ;;
   product)
     TASK_ID="product-briefing"
-    OUTPUT_DIR="$VAULT/product-briefings"
+    OUTPUT_DIR="$VAULT/weekly-products"
     BASE=$(date +%Y-%m-%d)
-    SUBDIR="product-briefings"
+    SUBDIR="weekly-products"
     DEDUP_OVERRIDE="skip the 'Before You Start' section (do NOT read previous product briefings). Do not deduplicate against previous briefings."
     ;;
   *)

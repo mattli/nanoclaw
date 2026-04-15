@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG="$SCRIPT_DIR/archive-briefings.conf"
-INTEL_DIR="$HOME/second-brain/projects/intelligence"
+INTEL_DIR="$HOME/second-brain/resources/intelligence"
 
 if [[ ! -f "$CONFIG" ]]; then
   echo "Error: config not found at $CONFIG"
