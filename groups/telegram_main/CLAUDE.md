@@ -41,6 +41,8 @@ At the start of a session, read `/workspace/extra/second-brain/resources/wiki/IN
 
 Check the wiki first when I ask about the AI landscape, a specific person, or a concept — it may already have a synthesized page on the topic before you do fresh web research.
 
+Long-form syntheses of large PDFs (50K–200K words) live in `wiki/long-form/`. Pending items are tracked in `wiki/long-form/QUEUE.md`. When I ask about the queue or to synthesize a specific item, the procedure is in `/workspace/extra/second-brain/areas/wiki/instructions/long-form-synthesis.md` — read it then.
+
 ## Daily To-Do List
 
 The file `/workspace/extra/second-brain/daily-to-do.md` is a to-do list with dated sections, most recent first. Format:
