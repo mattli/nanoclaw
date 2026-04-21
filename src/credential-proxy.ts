@@ -44,6 +44,7 @@ export function startCredentialProxy(
     'ANTHROPIC_BASE_URL',
     'GITHUB_TOKEN',
     'PARALLEL_API_KEY',
+    'COLD_MOUNTAIN_DEPLOY_HOOK',
   ]);
 
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
@@ -69,6 +70,42 @@ export function startCredentialProxy(
         res.end(
           `protocol=https\nhost=github.com\nusername=x-access-token\npassword=${secrets.GITHUB_TOKEN}\n`,
         );
+        return;
+      }
+
+      // Cold Mountain deploy hook — forwards POST to Vercel, keeping the hook URL off the container.
+      if (req.method === 'POST' && req.url === '/cold-mountain-deploy') {
+        if (!secrets.COLD_MOUNTAIN_DEPLOY_HOOK) {
+          res.writeHead(404);
+          res.end('No COLD_MOUNTAIN_DEPLOY_HOOK configured');
+          return;
+        }
+        const target = new URL(secrets.COLD_MOUNTAIN_DEPLOY_HOOK);
+        const upstreamReq = httpsRequest(
+          {
+            hostname: target.hostname,
+            port: 443,
+            path: target.pathname + target.search,
+            method: 'POST',
+            headers: { 'content-length': 0 },
+          },
+          (upRes) => {
+            logger.info(
+              { status: upRes.statusCode },
+              'Cold Mountain deploy hook triggered',
+            );
+            res.writeHead(upRes.statusCode!, upRes.headers);
+            upRes.pipe(res);
+          },
+        );
+        upstreamReq.on('error', (err) => {
+          logger.error({ err }, 'Cold Mountain deploy hook failed');
+          if (!res.headersSent) {
+            res.writeHead(502);
+            res.end('Bad Gateway');
+          }
+        });
+        upstreamReq.end();
         return;
       }
 
