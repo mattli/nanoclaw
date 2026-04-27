@@ -28,12 +28,19 @@ import { Resolver } from 'dns';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
 
-// Anthropic edge (Cloudflare-fronted) occasionally returns transient 5xx for
-// otherwise valid requests. Retry only on the codes Anthropic documents as
-// retryable, only before any bytes are sent downstream (streaming-safe), and
-// with a small budget to avoid stacking on top of the CLI's internal retries.
+// Anthropic edge (Cloudflare-fronted) intermittently fails in two ways:
+//   - Transient 5xx (502/503/504/529) on otherwise valid requests
+//   - TCP-layer resets (ECONNRESET / socket hang up) during sustained
+//     edge degradation, sometimes lasting several minutes
+// Retry both, only before any bytes have been sent downstream
+// (streaming-safe). Bound by an attempt cap AND a wall-clock deadline so a
+// single request can absorb a multi-minute outage without ever hanging
+// indefinitely. ECONNRESET is treated as retryable here even though strictly
+// the upstream may have processed the request — the alternative is hard
+// failure of the entire agent run, which is worse.
 const RETRYABLE_STATUS = new Set([502, 503, 504, 529]);
-const MAX_RETRIES = 2;
+const MAX_RETRIES = 8;
+const RETRY_DEADLINE_MS = 180_000;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;
 
@@ -327,12 +334,20 @@ export function startCredentialProxy(
 
         resolveHostCached(upstreamUrl.hostname)
           .then(async (ip) => {
+            const deadline = Date.now() + RETRY_DEADLINE_MS;
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
               const result = await sendOnce(ip);
+              const canRetry =
+                attempt < MAX_RETRIES &&
+                Date.now() < deadline &&
+                !res.headersSent;
 
               if (result === 'error') {
-                if (attempt < MAX_RETRIES && !res.headersSent) {
-                  const delay = backoffDelay(attempt);
+                if (canRetry) {
+                  const delay = Math.min(
+                    backoffDelay(attempt),
+                    Math.max(0, deadline - Date.now()),
+                  );
                   logger.warn(
                     { url: req.url, attempt: attempt + 1, delay },
                     'Credential proxy retrying after upstream error',
@@ -348,15 +363,14 @@ export function startCredentialProxy(
               }
 
               const status = result.statusCode ?? 0;
-              if (
-                RETRYABLE_STATUS.has(status) &&
-                attempt < MAX_RETRIES &&
-                !res.headersSent
-              ) {
+              if (RETRYABLE_STATUS.has(status) && canRetry) {
                 const retryAfter = result.headers['retry-after'];
-                const delay = backoffDelay(
-                  attempt,
-                  Array.isArray(retryAfter) ? retryAfter[0] : retryAfter,
+                const delay = Math.min(
+                  backoffDelay(
+                    attempt,
+                    Array.isArray(retryAfter) ? retryAfter[0] : retryAfter,
+                  ),
+                  Math.max(0, deadline - Date.now()),
                 );
                 logger.warn(
                   { url: req.url, status, attempt: attempt + 1, delay },

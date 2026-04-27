@@ -21,6 +21,24 @@ import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
+// Anthropic edge outages occasionally exceed the credential proxy's
+// 3-min retry deadline, surfacing as `API Error: 5xx` (proxy gave up) or
+// raw socket errors (proxy never connected). When that happens we'd
+// rather absorb the outage than drop the run on the floor — so the
+// scheduler reschedules the same task for +5 min, up to 2 retries
+// (3 attempts total spread over ~10 min). In-memory map; resets on
+// process restart, which is fine — restart implies the operator is
+// already handling whatever broke.
+const TRANSIENT_ERROR_PATTERN =
+  /API Error: 5\d\d|ECONNRESET|socket hang up|ETIMEDOUT|EAI_AGAIN/i;
+const MAX_TRANSIENT_RETRIES = 2;
+const TRANSIENT_RETRY_DELAY_MS = 5 * 60 * 1000;
+const transientRetryCount = new Map<string, number>();
+
+function isTransientError(error: string | null): boolean {
+  return !!error && TRANSIENT_ERROR_PATTERN.test(error);
+}
+
 /**
  * Compute the next run time for a recurring task, anchored to the
  * task's scheduled time rather than Date.now() to prevent cumulative
@@ -301,12 +319,41 @@ async function runTask(
     error,
   });
 
-  const nextRun = computeNextRun(task);
-  const resultSummary = error
+  let nextRun = computeNextRun(task);
+  let resultSummary = error
     ? `Error: ${error}`
     : result
       ? result.slice(0, 200)
       : 'Completed';
+
+  if (error && isTransientError(error)) {
+    const prior = transientRetryCount.get(task.id) ?? 0;
+    if (prior < MAX_TRANSIENT_RETRIES) {
+      const retryAt = new Date(
+        Date.now() + TRANSIENT_RETRY_DELAY_MS,
+      ).toISOString();
+      transientRetryCount.set(task.id, prior + 1);
+      // For one-off tasks, computeNextRun returns null which would mark
+      // the task completed. Override so the scheduler picks it up again.
+      nextRun = retryAt;
+      resultSummary = `Transient error (retry ${prior + 1}/${MAX_TRANSIENT_RETRIES} at ${retryAt}): ${error}`;
+      logger.warn(
+        { taskId: task.id, attempt: prior + 1, retryAt, error },
+        'Rescheduling task after transient API error',
+      );
+      // Make sure the row is active so the scheduler picks it back up.
+      updateTask(task.id, { status: 'active' });
+    } else {
+      transientRetryCount.delete(task.id);
+      logger.error(
+        { taskId: task.id, attempts: prior + 1, error },
+        'Task exhausted transient retry budget',
+      );
+    }
+  } else if (!error) {
+    transientRetryCount.delete(task.id);
+  }
+
   updateTaskAfterRun(task.id, nextRun, resultSummary);
 }
 
