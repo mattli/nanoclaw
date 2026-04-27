@@ -116,3 +116,9 @@ Any changes to `src/` must be committed before the session ends. `npm run build`
 
 The container buildkit caches the build context aggressively. `build.sh` handles this automatically — it prunes the builder and rebuilds with `--no-cache` every time.
 
+## Diagnosing Group-Specific Failures
+
+When a single group's scheduled tasks fail repeatedly while others run fine through the same proxy/SDK, check `registered_groups.container_config` first — per-group `model` overrides (added 2026-04-09) mean different groups can be on Opus vs Sonnet. Only `readwise-wiki` and `wiki-tutor` are on Opus by default; the rest use Sonnet. If only Opus groups are failing, it's almost certainly upstream model-availability, not our code. The error shape `subtype=success text=API Error: 5xx` is the Code CLI packaging an upstream error as a result message after its own internal retries exhausted — proxy/scheduler retry layers can't help with that, only a model switch can.
+
+Quick verification before tuning retries: spot-check completion status of other groups' tasks in `scheduled_tasks` over the same window. Different model classes failing differently = upstream issue, not ours.
+
