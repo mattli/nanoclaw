@@ -90,6 +90,8 @@ Privacy mode is per-bot and global across all groups that bot is a member of. Tu
 
 Never pass third-party API keys directly into containers via environment variables. All secrets must go through the credential proxy (`src/credential-proxy.ts`). The proxy reads keys from `.env` on the host and injects auth headers on outbound requests — containers never see real credentials. When adding a new external service, add a proxy route (like `/parallel-search/`) and have the container hit the proxy URL instead.
 
+The proxy also has two transient-failure mitigations on the Anthropic upstream path: (1) public-DNS resolver + 5-min cache + last-known-good fallback (defends against Tailscale MagicDNS drops); (2) retry on 502/503/504/529 only, max 2 attempts, exponential backoff with full jitter, honors `Retry-After`, streaming-safe (only retries before any bytes are piped downstream). The retry budget is intentionally small because `agent-runner` uses `@anthropic-ai/claude-agent-sdk` which spawns the `claude` CLI — the CLI does its own internal retries on an unknown budget, so stacking aggressively would compound. If you add a new proxy route that talks to a flaky upstream, decide explicitly whether to copy this pattern; the Parallel AI route currently doesn't have it.
+
 ## Launchd PATH
 
 The launchd environment has a minimal PATH (`/usr/local/bin:/usr/bin:/bin`). Skill handlers that spawn subprocesses needing Homebrew binaries (Node, Python packages, etc.) must augment PATH with `/opt/homebrew/bin`. See `src/skill-handlers/last30days.ts` for the pattern.
