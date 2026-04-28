@@ -122,3 +122,7 @@ When a single group's scheduled tasks fail repeatedly while others run fine thro
 
 Quick verification before tuning retries: spot-check completion status of other groups' tasks in `scheduled_tasks` over the same window. Different model classes failing differently = upstream issue, not ours.
 
+## SQLite Database Location
+
+The live DB is at `store/messages.db`, NOT `data/nanoclaw.db` or `data/tasks.db`. The latter are zero-byte stubs from earlier directory layouts. `STORE_DIR` resolution in `src/db.ts:163` is the source of truth — it points at `store/`. Any direct SQL inspection or task insertion must hit `store/messages.db`. Schema includes `scheduled_tasks`, `registered_groups`, `chats`, `messages`, `task_run_logs`, `router_state`, `sessions`.
+
