@@ -2,7 +2,7 @@
  * Container runtime abstraction for NanoClaw.
  * All runtime-specific logic lives here so swapping runtimes means changing one file.
  */
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 
@@ -65,16 +65,71 @@ export function stopContainer(name: string): void {
   execSync(`${CONTAINER_RUNTIME_BIN} stop -t 1 ${name}`, { stdio: 'pipe' });
 }
 
-/** Ensure the container runtime is running, starting it if needed. */
-export function ensureContainerRuntimeRunning(): void {
+/** Probe the daemon. Returns true if reachable. */
+function probeContainerRuntime(timeoutMs: number): boolean {
   try {
     execSync(`${CONTAINER_RUNTIME_BIN} info`, {
       stdio: 'pipe',
-      timeout: 10000,
+      timeout: timeoutMs,
     });
-    logger.debug('Container runtime already running');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const DOCKER_BOOT_TIMEOUT_MS = 45_000;
+const DOCKER_BOOT_POLL_INTERVAL_MS = 1_500;
+
+/**
+ * On macOS, attempt to launch Docker Desktop and wait for the daemon.
+ * Returns true if the daemon is reachable within the timeout.
+ */
+function tryLaunchDockerDesktop(): boolean {
+  if (os.platform() !== 'darwin') return false;
+
+  logger.warn('Launching Docker Desktop');
+  try {
+    spawn('open', ['-a', 'Docker'], { stdio: 'ignore', detached: true }).unref();
   } catch (err) {
-    logger.error({ err }, 'Failed to reach container runtime');
+    logger.error({ err }, 'Failed to invoke `open -a Docker`');
+    return false;
+  }
+
+  const start = Date.now();
+  while (Date.now() - start < DOCKER_BOOT_TIMEOUT_MS) {
+    // Sync sleep so we block the startup path until the daemon is ready.
+    execSync(`sleep ${DOCKER_BOOT_POLL_INTERVAL_MS / 1000}`);
+    if (probeContainerRuntime(5_000)) {
+      const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
+      logger.info({ elapsedSec }, 'Docker daemon ready');
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Ensure the container runtime is running, starting it if needed. */
+export function ensureContainerRuntimeRunning(): void {
+  if (probeContainerRuntime(10_000)) {
+    logger.debug('Container runtime already running');
+    return;
+  }
+
+  logger.warn('docker info failed — attempting recovery');
+  if (tryLaunchDockerDesktop()) return;
+
+  const err = new Error(
+    `Docker daemon did not become ready within ${DOCKER_BOOT_TIMEOUT_MS / 1000}s`,
+  );
+  logger.error(
+    { err, timeoutMs: DOCKER_BOOT_TIMEOUT_MS },
+    'Giving up on Docker daemon — failing fast to avoid launchd retry storm',
+  );
+  try {
+    execSync(`${CONTAINER_RUNTIME_BIN} info`, { stdio: 'pipe', timeout: 5000 });
+  } catch (probeErr) {
+    logger.error({ err: probeErr }, 'Final docker info probe (for diagnostics)');
     console.error(
       '\n╔════════════════════════════════════════════════════════════════╗',
     );
@@ -99,10 +154,10 @@ export function ensureContainerRuntimeRunning(): void {
     console.error(
       '╚════════════════════════════════════════════════════════════════╝\n',
     );
-    throw new Error('Container runtime is required but failed to start', {
-      cause: err,
-    });
   }
+  throw new Error('Container runtime is required but failed to start', {
+    cause: err,
+  });
 }
 
 /** Kill orphaned NanoClaw containers from previous runs. */
