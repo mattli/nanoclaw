@@ -85,12 +85,48 @@ const DOCKER_BOOT_POLL_INTERVAL_MS = 1_500;
  * On macOS, attempt to launch Docker Desktop and wait for the daemon.
  * Returns true if the daemon is reachable within the timeout.
  */
+// Helper backend processes (NOT the Docker.app GUI). When the GUI dies but these
+// linger, `open -a Docker` no-ops because macOS thinks Docker is already running.
+const DOCKER_ORPHAN_PATTERNS = ['com.docker.backend', 'com.docker.build'];
+
+function reapDockerOrphans(): void {
+  let pids: string[] = [];
+  try {
+    const out = execSync(`pgrep -f '${DOCKER_ORPHAN_PATTERNS.join('|')}'`, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf-8',
+    });
+    pids = out.trim().split('\n').filter(Boolean);
+  } catch {
+    // pgrep exits 1 when no matches — that's the no-orphans case
+  }
+
+  if (pids.length === 0) {
+    logger.warn('No orphan Docker processes found, proceeding to launch');
+    return;
+  }
+
+  logger.warn(
+    { count: pids.length, pids },
+    `Found ${pids.length} orphan Docker backend processes, killing`,
+  );
+  try {
+    execSync(`kill -9 ${pids.join(' ')}`, { stdio: 'pipe' });
+  } catch (err) {
+    logger.error({ err }, 'Failed to kill some orphan Docker processes');
+  }
+}
+
 function tryLaunchDockerDesktop(): boolean {
   if (os.platform() !== 'darwin') return false;
 
+  reapDockerOrphans();
   logger.warn('Launching Docker Desktop');
   try {
-    spawn('open', ['-a', 'Docker'], { stdio: 'ignore', detached: true }).unref();
+    spawn('open', ['-a', 'Docker'], {
+      stdio: 'ignore',
+      detached: true,
+    }).unref();
   } catch (err) {
     logger.error({ err }, 'Failed to invoke `open -a Docker`');
     return false;
@@ -129,7 +165,10 @@ export function ensureContainerRuntimeRunning(): void {
   try {
     execSync(`${CONTAINER_RUNTIME_BIN} info`, { stdio: 'pipe', timeout: 5000 });
   } catch (probeErr) {
-    logger.error({ err: probeErr }, 'Final docker info probe (for diagnostics)');
+    logger.error(
+      { err: probeErr },
+      'Final docker info probe (for diagnostics)',
+    );
     console.error(
       '\n╔════════════════════════════════════════════════════════════════╗',
     );
