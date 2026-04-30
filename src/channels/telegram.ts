@@ -107,16 +107,18 @@ async function sendTelegramMessage(
   chatId: string | number,
   text: string,
   options: { message_thread_id?: number } = {},
-): Promise<void> {
+): Promise<string | void> {
   try {
-    await api.sendMessage(chatId, text, {
+    const sent = await api.sendMessage(chatId, text, {
       ...options,
       parse_mode: 'Markdown',
     });
+    return String(sent.message_id);
   } catch (err) {
     // Fallback: send as plain text if Markdown parsing fails
     logger.debug({ err }, 'Markdown send failed, falling back to plain text');
-    await api.sendMessage(chatId, text, options);
+    const sent = await api.sendMessage(chatId, text, options);
+    return String(sent.message_id);
   }
 }
 
@@ -422,7 +424,7 @@ export class TelegramChannel implements Channel {
     }
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(jid: string, text: string): Promise<string | void> {
     if (this.bots.size === 0) {
       logger.warn('Telegram bot not initialized');
       return;
@@ -441,22 +443,66 @@ export class TelegramChannel implements Channel {
     try {
       const numericId = jid.replace(/^tg:/, '');
 
-      // Telegram has a 4096 character limit per message — split if needed
+      // Telegram has a 4096 character limit per message — split if needed.
+      // Returns the id of the FIRST chunk so callers can edit it as more streams in.
       const MAX_LENGTH = 4096;
+      let firstId: string | void = undefined;
       if (text.length <= MAX_LENGTH) {
-        await sendTelegramMessage(bot.api, numericId, text);
+        firstId = await sendTelegramMessage(bot.api, numericId, text);
       } else {
         for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await sendTelegramMessage(
+          const id = await sendTelegramMessage(
             bot.api,
             numericId,
             text.slice(i, i + MAX_LENGTH),
           );
+          if (i === 0) firstId = id;
         }
       }
       logger.info({ jid, length: text.length, botId }, 'Telegram message sent');
+      return firstId;
     } catch (err) {
       logger.error({ jid, botId, err }, 'Failed to send Telegram message');
+    }
+  }
+
+  async editMessage(
+    jid: string,
+    messageId: string,
+    text: string,
+  ): Promise<void> {
+    if (this.bots.size === 0) return;
+    const botId = this.resolveBotIdForJid(jid);
+    const bot = this.botForId(botId);
+    if (!bot) return;
+
+    const numericChatId = jid.replace(/^tg:/, '');
+    const numericMsgId = Number(messageId);
+    if (!Number.isFinite(numericMsgId)) return;
+
+    // Telegram caps edits at 4096 chars; truncate with ellipsis if longer.
+    const trimmed = text.length > 4096 ? text.slice(0, 4093) + '...' : text;
+
+    try {
+      await bot.api.editMessageText(
+        numericChatId,
+        numericMsgId,
+        trimmed,
+        { parse_mode: 'Markdown' },
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // "message is not modified" is benign — Telegram rejects no-op edits.
+      if (msg.includes('message is not modified')) return;
+      // Markdown parse failure → retry as plain text
+      try {
+        await bot.api.editMessageText(numericChatId, numericMsgId, trimmed);
+      } catch (err2) {
+        logger.debug(
+          { jid, messageId, err: err2 },
+          'Telegram editMessage failed',
+        );
+      }
     }
   }
 

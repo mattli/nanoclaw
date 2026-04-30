@@ -89,7 +89,10 @@ export interface TaskRunLog {
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string): Promise<void>;
+  // Returns the platform message id when supported (used for streaming progress edits).
+  sendMessage(jid: string, text: string): Promise<string | void>;
+  // Optional: edit a previously-sent message in place. Channels without edit support fall back to fresh sends.
+  editMessage?(jid: string, messageId: string, text: string): Promise<void>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;

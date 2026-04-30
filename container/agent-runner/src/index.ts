@@ -37,8 +37,9 @@ interface ContainerInput {
 }
 
 interface ContainerOutput {
-  status: 'success' | 'error';
+  status: 'success' | 'error' | 'progress';
   result: string | null;
+  kind?: 'text' | 'tool_use';
   newSessionId?: string;
   error?: string;
 }
@@ -520,6 +521,33 @@ async function runQuery(
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
+
+      // Stream progress events (text + tool_use) so the host can show the user
+      // intermediate activity. Host gates on NANOCLAW_STREAMING_PROGRESS — if
+      // the flag is off, these markers are received but ignored, so it's safe
+      // to always emit. Keeps the container code flag-free.
+      const blocks =
+        ((message as { message?: { content?: unknown[] } }).message?.content ??
+          []) as Array<{
+          type?: string;
+          text?: string;
+          name?: string;
+          input?: { command?: unknown };
+        }>;
+      for (const b of blocks) {
+        if (b.type === 'text' && b.text && b.text.trim()) {
+          writeOutput({ status: 'progress', kind: 'text', result: b.text });
+        } else if (b.type === 'tool_use') {
+          const cmd = b.input?.command
+            ? `: ${String(b.input.command).slice(0, 80)}`
+            : '';
+          writeOutput({
+            status: 'progress',
+            kind: 'tool_use',
+            result: `🔧 ${b.name ?? 'tool'}${cmd}`,
+          });
+        }
+      }
     }
 
     if (message.type === 'system' && message.subtype === 'init') {

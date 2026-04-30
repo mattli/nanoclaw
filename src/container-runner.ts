@@ -47,8 +47,10 @@ export interface ContainerInput {
 }
 
 export interface ContainerOutput {
-  status: 'success' | 'error';
+  status: 'success' | 'error' | 'progress';
   result: string | null;
+  // For status === 'progress': 'text' = streamed assistant text, 'tool_use' = tool invocation note.
+  kind?: 'text' | 'tool_use';
   newSessionId?: string;
   error?: string;
 }

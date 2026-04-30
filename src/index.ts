@@ -13,6 +13,7 @@ import {
   TIMEZONE,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -259,8 +260,69 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
+  // Feature flag: NANOCLAW_STREAMING_PROGRESS=1 enables in-place edits of a
+  // single Telegram message as the agent streams text + tool_use blocks.
+  // Off → legacy behavior (silent until final result, then one send).
+  // The container always emits 'progress' markers; gating lives here so
+  // toggling the flag requires only a process restart, not a rebuild.
+  // Read from both process.env (dev) and .env file (launchd doesn't populate
+  // process.env — see CLAUDE.md "Launchd PATH" section).
+  const flagFromEnvFile = readEnvFile(['NANOCLAW_STREAMING_PROGRESS'])
+    .NANOCLAW_STREAMING_PROGRESS;
+  const streamingProgress =
+    (process.env.NANOCLAW_STREAMING_PROGRESS === '1' ||
+      flagFromEnvFile === '1') &&
+    !!channel.editMessage;
+
+  // Streaming-progress state (only used when flag is on)
+  let progressMessageId: string | undefined;
+  let progressBuffer = '';
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  const PROGRESS_FLUSH_MS = 800;
+
+  const flushProgress = async () => {
+    flushTimer = null;
+    if (!progressBuffer) return;
+    try {
+      if (progressMessageId && channel.editMessage) {
+        await channel.editMessage(chatJid, progressMessageId, progressBuffer);
+      } else {
+        const id = await channel.sendMessage(chatJid, progressBuffer);
+        if (typeof id === 'string') progressMessageId = id;
+      }
+    } catch (err) {
+      logger.debug({ group: group.name, err }, 'Failed to flush progress');
+    }
+  };
+
   const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
+    // ---- Streaming progress path (flag-gated) ----
+    if (streamingProgress && result.status === 'progress') {
+      const note = (result.result ?? '').trim();
+      if (note) {
+        if (result.kind === 'text') {
+          // Assistant text supersedes any pending tool_use note.
+          progressBuffer = note;
+        } else {
+          // Tool use — append as a status line.
+          progressBuffer = progressBuffer
+            ? `${progressBuffer}\n${note}`
+            : note;
+        }
+        if (!flushTimer) {
+          flushTimer = setTimeout(
+            () => void flushProgress(),
+            PROGRESS_FLUSH_MS,
+          );
+        }
+      }
+      resetIdleTimer();
+      return;
+    }
+    // Ignore progress markers entirely when flag is off.
+    if (result.status === 'progress') return;
+
+    // ---- Final result handling ----
     if (result.result) {
       const raw =
         typeof result.result === 'string'
@@ -270,7 +332,26 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
       if (text) {
-        await channel.sendMessage(chatJid, text);
+        if (streamingProgress) {
+          // Cancel any pending progress flush — final answer takes over.
+          if (flushTimer) {
+            clearTimeout(flushTimer);
+            flushTimer = null;
+          }
+          if (
+            progressMessageId &&
+            channel.editMessage &&
+            text.length <= 4096
+          ) {
+            await channel.editMessage(chatJid, progressMessageId, text);
+          } else {
+            await channel.sendMessage(chatJid, text);
+          }
+          progressMessageId = undefined;
+          progressBuffer = '';
+        } else {
+          await channel.sendMessage(chatJid, text);
+        }
         outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
@@ -695,7 +776,7 @@ async function main(): Promise<void> {
     sendMessage: (jid, text) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      return channel.sendMessage(jid, text);
+      return channel.sendMessage(jid, text).then(() => undefined);
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
