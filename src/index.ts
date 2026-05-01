@@ -267,8 +267,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // toggling the flag requires only a process restart, not a rebuild.
   // Read from both process.env (dev) and .env file (launchd doesn't populate
   // process.env — see CLAUDE.md "Launchd PATH" section).
-  const flagFromEnvFile = readEnvFile(['NANOCLAW_STREAMING_PROGRESS'])
-    .NANOCLAW_STREAMING_PROGRESS;
+  const flagFromEnvFile = readEnvFile([
+    'NANOCLAW_STREAMING_PROGRESS',
+  ]).NANOCLAW_STREAMING_PROGRESS;
   const streamingProgress =
     (process.env.NANOCLAW_STREAMING_PROGRESS === '1' ||
       flagFromEnvFile === '1') &&
@@ -305,9 +306,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           progressBuffer = note;
         } else {
           // Tool use — append as a status line.
-          progressBuffer = progressBuffer
-            ? `${progressBuffer}\n${note}`
-            : note;
+          progressBuffer = progressBuffer ? `${progressBuffer}\n${note}` : note;
         }
         if (!flushTimer) {
           flushTimer = setTimeout(
@@ -338,11 +337,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             clearTimeout(flushTimer);
             flushTimer = null;
           }
-          if (
-            progressMessageId &&
-            channel.editMessage &&
-            text.length <= 4096
-          ) {
+          if (progressMessageId && channel.editMessage && text.length <= 4096) {
             await channel.editMessage(chatJid, progressMessageId, text);
           } else {
             await channel.sendMessage(chatJid, text);

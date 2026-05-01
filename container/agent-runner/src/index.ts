@@ -62,6 +62,86 @@ interface SDKUserMessage {
   session_id: string;
 }
 
+/**
+ * Render a tool_use block as a short, human-readable line for streaming
+ * progress to the user. Falls back to `🔧 <name>` for unknown tools.
+ */
+function formatToolUse(name: string, input: Record<string, unknown>): string {
+  const truncate = (v: unknown, n = 80): string => {
+    const s = typeof v === 'string' ? v : JSON.stringify(v ?? '');
+    return s.length > n ? s.slice(0, n - 1) + '…' : s;
+  };
+  const str = (k: string): string | undefined => {
+    const v = input[k];
+    return typeof v === 'string' && v ? v : undefined;
+  };
+
+  // MCP tools: mcp__<server>__<tool>
+  if (name.startsWith('mcp__')) {
+    const parts = name.split('__');
+    const server = (parts[1] ?? '').replace(/_/g, ' ');
+    const tool = (parts.slice(2).join('_') || 'call').replace(/_/g, ' ');
+    const pretty = server.charAt(0).toUpperCase() + server.slice(1);
+    return `🔌 ${pretty}: ${tool}`;
+  }
+
+  switch (name) {
+    case 'Read': {
+      const p = str('file_path');
+      return p ? `📖 Reading ${truncate(p)}` : '📖 Reading';
+    }
+    case 'Edit':
+    case 'NotebookEdit': {
+      const p = str('file_path') ?? str('notebook_path');
+      return p ? `✏️ Editing ${truncate(p)}` : '✏️ Editing';
+    }
+    case 'Write': {
+      const p = str('file_path');
+      return p ? `📝 Writing ${truncate(p)}` : '📝 Writing';
+    }
+    case 'Grep': {
+      const p = str('pattern');
+      return p ? `🔍 Searching for "${truncate(p, 60)}"` : '🔍 Searching';
+    }
+    case 'Glob': {
+      const p = str('pattern');
+      return p ? `🔍 Finding ${truncate(p)}` : '🔍 Finding files';
+    }
+    case 'Bash': {
+      const c = str('command');
+      return c ? `⚙️ Running: ${truncate(c)}` : '⚙️ Running command';
+    }
+    case 'WebFetch': {
+      const u = str('url');
+      return u ? `🌐 Fetching ${truncate(u)}` : '🌐 Fetching';
+    }
+    case 'WebSearch': {
+      const q = str('query');
+      return q ? `🔎 Web search: ${truncate(q, 60)}` : '🔎 Web search';
+    }
+    case 'Task':
+    case 'Agent': {
+      const d = str('description') ?? str('subagent_type');
+      return d ? `🤖 Spawning agent: ${truncate(d, 60)}` : '🤖 Spawning agent';
+    }
+    case 'TodoWrite':
+      return '📝 Updating todos';
+    case 'Skill': {
+      const s = str('skill');
+      return s ? `🎯 Skill: ${truncate(s)}` : '🎯 Invoking skill';
+    }
+    default: {
+      // Last-resort: show name + first scalar input value if any.
+      const firstVal = Object.values(input).find(
+        (v) => typeof v === 'string' || typeof v === 'number',
+      );
+      return firstVal !== undefined
+        ? `🔧 ${name}: ${truncate(firstVal)}`
+        : `🔧 ${name}`;
+    }
+  }
+}
+
 const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
@@ -532,19 +612,16 @@ async function runQuery(
           type?: string;
           text?: string;
           name?: string;
-          input?: { command?: unknown };
+          input?: Record<string, unknown>;
         }>;
       for (const b of blocks) {
         if (b.type === 'text' && b.text && b.text.trim()) {
           writeOutput({ status: 'progress', kind: 'text', result: b.text });
         } else if (b.type === 'tool_use') {
-          const cmd = b.input?.command
-            ? `: ${String(b.input.command).slice(0, 80)}`
-            : '';
           writeOutput({
             status: 'progress',
             kind: 'tool_use',
-            result: `🔧 ${b.name ?? 'tool'}${cmd}`,
+            result: formatToolUse(b.name ?? 'tool', b.input ?? {}),
           });
         }
       }

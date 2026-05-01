@@ -484,12 +484,9 @@ export class TelegramChannel implements Channel {
     const trimmed = text.length > 4096 ? text.slice(0, 4093) + '...' : text;
 
     try {
-      await bot.api.editMessageText(
-        numericChatId,
-        numericMsgId,
-        trimmed,
-        { parse_mode: 'Markdown' },
-      );
+      await bot.api.editMessageText(numericChatId, numericMsgId, trimmed, {
+        parse_mode: 'Markdown',
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // "message is not modified" is benign — Telegram rejects no-op edits.
