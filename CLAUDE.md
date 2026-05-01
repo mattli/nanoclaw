@@ -128,3 +128,7 @@ Quick verification before tuning retries: spot-check completion status of other 
 
 The live DB is at `store/messages.db`, NOT `data/nanoclaw.db` or `data/tasks.db`. The latter are zero-byte stubs from earlier directory layouts. `STORE_DIR` resolution in `src/db.ts:163` is the source of truth — it points at `store/`. Any direct SQL inspection or task insertion must hit `store/messages.db`. Schema includes `scheduled_tasks`, `registered_groups`, `chats`, `messages`, `task_run_logs`, `router_state`, `sessions`.
 
+## Scheduled Tasks Have Two Sources of Truth
+
+`scheduled_tasks` rows in `store/messages.db` are mirrored into per-group `data/ipc/<group>/current_tasks.json` files that the running container agent reads. When editing a task prompt directly via SQL, also update the relevant `current_tasks.json` mirror — otherwise the running agent will see the old prompt until the next full mirror refresh. Search both before declaring a prompt change complete.
+
