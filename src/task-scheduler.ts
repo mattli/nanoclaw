@@ -299,8 +299,8 @@ async function runTask(
     const label = task.display_name || task.id;
     if (error) {
       await deps.sendMessage(task.chat_jid, `${label}: ❌ failed`);
-    } else if (!isMain) {
-      await deps.sendMessage(task.chat_jid, `${label}: ✅ done`);
+    } else if (!isMain && task.display_name) {
+      await deps.sendMessage(task.chat_jid, `${task.display_name}: ✅ done`);
     }
   } catch (err) {
     if (closeTimer) clearTimeout(closeTimer);

@@ -758,15 +758,68 @@ async function main(): Promise<void> {
     onProcess: (groupJid, proc, containerName, groupFolder) =>
       queue.registerProcess(groupJid, proc, containerName, groupFolder),
     sendMessage: async (jid, rawText) => {
-      const channel = findChannel(channels, jid);
+      // Resolve pseudo jids (task:, internal:) to the main group. These
+      // identify non-main groups internally and were never deliverable on
+      // their own; routing them to main is the designed default. A real
+      // channel jid (tg:, etc.) that fails to resolve IS a problem and
+      // gets a warning.
+      const isPseudo = jid.startsWith('task:') || jid.startsWith('internal:');
+      let targetJid = jid;
+      let channel = findChannel(channels, targetJid);
+      if (!channel) {
+        const mainEntry = Object.entries(registeredGroups).find(
+          ([, g]) => g.isMain,
+        );
+        if (mainEntry) {
+          const [mainJid] = mainEntry;
+          const fallback = findChannel(channels, mainJid);
+          if (fallback) {
+            if (!isPseudo) {
+              logger.warn(
+                { originalJid: jid, fallbackJid: mainJid },
+                'Routed unresolved non-pseudo jid to main group',
+              );
+            }
+            targetJid = mainJid;
+            channel = fallback;
+          }
+        }
+      }
       if (!channel) {
         logger.warn({ jid }, 'No channel owns JID, cannot send message');
         return;
       }
       const text = formatOutbound(rawText);
-      if (text) await channel.sendMessage(jid, text);
+      if (text) await channel.sendMessage(targetJid, text);
     },
   });
+
+  // Startup audit: surface tasks whose chat_jid won't resolve AND isn't a
+  // recognized pseudo prefix. Pseudo jids are expected for non-main groups
+  // and use the designed main-group fallback; flagging them at boot would
+  // be noise. A non-pseudo unresolved jid (e.g. tg: pointing at a gone
+  // chat) is a real problem worth seeing at boot, not just on next run.
+  {
+    const tasks = getAllTasks().filter((t) => t.status === 'active');
+    const suspicious = tasks.filter(
+      (t) =>
+        !findChannel(channels, t.chat_jid) &&
+        !t.chat_jid.startsWith('task:') &&
+        !t.chat_jid.startsWith('internal:'),
+    );
+    if (suspicious.length > 0) {
+      logger.warn(
+        {
+          count: suspicious.length,
+          tasks: suspicious.map((t) => ({
+            id: t.id,
+            chat_jid: t.chat_jid,
+          })),
+        },
+        'Active tasks have chat_jid that no channel owns; completion pings will fall back to main group',
+      );
+    }
+  }
   startIpcWatcher({
     sendMessage: (jid, text) => {
       const channel = findChannel(channels, jid);
