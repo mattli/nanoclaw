@@ -78,6 +78,10 @@ systemctl --user restart nanoclaw
 
 **Docker daemon unreachable / launchd retry loop:** `container-runtime.ts` (`ensureContainerRuntimeRunning`) auto-launches Docker Desktop on `docker info` failure (45s budget) and reaps orphan `com.docker.backend` processes first, since `open -a Docker` no-ops while those linger. Manual recovery if needed: `pkill -9 -f Docker.app && open -a Docker`. Root-cause diagnosis lives in Docker's own logs at `~/Library/Containers/com.docker.docker/Data/log/host/` — `com.docker.virtualization.log` shows VM PID lifecycle (long uptime + sleep/wake events are the known killer), and `com.docker.backend.log` shows backend cold-restarts as `running monitor` / `running services`. (Recovery logic in commits c9b8993, 2a0b120; see 2026-04-29 incident.)
 
+## Scheduler Done-Pings
+
+After a scheduled task completes, the scheduler sends `${display_name}: ✅ done` to `task.chat_jid` (`src/task-scheduler.ts:303`). Two safety nets added 2026-06-02 (commit `1116d2d`): (1) the sendMessage dep in `src/index.ts:760` falls back to the main group's jid when `chat_jid` is a pseudo prefix (`task:`, `internal:`) or otherwise doesn't resolve to a channel — pseudo fallbacks are silent (designed), non-pseudo fallbacks log WARN; (2) the ping requires `task.display_name`, so internal/transient agent-scheduled tasks (per-doc workers, ad-hoc reminders) stay silent. Startup audit at boot logs any non-pseudo `chat_jid` that no channel owns. When debugging silent ping failures, grep both `logs/nanoclaw.log` AND `logs/nanoclaw.error.log` — the no-channel warn lives in the error log only.
+
 ## Telegram Bot Privacy Mode (for `requiresTrigger: false` groups)
 
 Telegram bots have a **Group Privacy** setting in BotFather that's on by default. With it on, bots in group chats only see: commands (starting with `/`), messages @mentioning the bot, and replies to the bot's own messages. Everything else is hidden from the bot at the Telegram layer, before NanoClaw ever sees it.
