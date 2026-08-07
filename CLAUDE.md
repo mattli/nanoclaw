@@ -136,3 +136,17 @@ The live DB is at `store/messages.db`, NOT `data/nanoclaw.db` or `data/tasks.db`
 
 `scheduled_tasks` rows in `store/messages.db` are mirrored into per-group `data/ipc/<group>/current_tasks.json` files that the running container agent reads. When editing a task prompt directly via SQL, also update the relevant `current_tasks.json` mirror — otherwise the running agent will see the old prompt until the next full mirror refresh. Search both before declaring a prompt change complete.
 
+## Script-Mode Tasks Must Be Created by SQL, Never via Telegram or IPC
+
+`createTask()` has exactly one caller — `src/ipc.ts:262` — and Telegram requests route through it. That path clamps the mode:
+
+```js
+context_mode === 'group' || context_mode === 'isolated' ? context_mode : 'isolated'
+```
+
+`'script'` is not accepted and **falls through to `'isolated'` silently**. So asking NanoClaw to "schedule this shell script every 30 minutes" does not fail — it creates a task that spawns a container agent burning tokens on every run. A silent wrong-mode task is worse than no task.
+
+To add a script task: INSERT the row directly (back up `store/messages.db` first — it is `journal_mode=delete`, so use a busy timeout), then update the `data/ipc/<group>/current_tasks.json` mirror per the rule above. No restart is needed — `getDueTasks()` re-queries the DB every poll, so a correctly-inserted row is picked up on its own. Never restart NanoClaw to make a task appear.
+
+Confirm a new task actually fired rather than assuming: `next_run` advancing in `scheduled_tasks` is the strongest single tell, since the scheduler only moves it after a real run. Cross-check `task_run_logs` and the `taskId` lines in `logs/nanoclaw.log`. All three existing script tasks (`vault-sync`, `archive-briefings`, `dotfiles-sync`) were created this way; their `created_at` formats differ from IPC-created tasks, which is how you can tell them apart.
+
